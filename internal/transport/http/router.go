@@ -21,6 +21,7 @@ type Dependencies struct {
 	Usuarios       *service.UsuarioService
 	Auditoria      *service.AuditoriaService
 	AuditoriaStore service.AuditoriaStore
+	Errores        *service.ErrorService
 	DB             *pgxpool.Pool
 	Logger         *slog.Logger
 }
@@ -84,15 +85,19 @@ func NewRouter(d Dependencies) http.Handler {
 	escritura("POST /api/v1/usuarios", "usuarios:escribir", uh.Crear)
 	escritura("PUT /api/v1/usuarios/{id}", "usuarios:escribir", uh.Actualizar)
 	escritura("POST /api/v1/usuarios/{id}/desbloquear", "usuarios:escribir", uh.Desbloquear)
+	escritura("POST /api/v1/usuarios/{id}/revocar-sesiones", "usuarios:escribir", uh.RevocarSesiones)
 
 	audh := NewAuditoriaHandler(d.Auditoria, d.Logger)
 	protegido("GET /api/v1/auditoria", "auditoria:leer", audh.Listar)
+
+	erh := NewErrorHandler(d.Errores, d.Logger)
+	protegido("GET /api/v1/errores", "errores:leer", erh.Listar)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "ruta no encontrada")
 	})
 
-	return withMiddleware(mux, d.Logger)
+	return withMiddleware(mux, d.Logger, d.Errores)
 }
 
 func healthHandler(db *pgxpool.Pool) http.HandlerFunc {

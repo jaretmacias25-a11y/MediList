@@ -26,7 +26,7 @@ func NewUsuarioStore(db *pgxpool.Pool) *UsuarioStore {
 const usuarioSelect = `
 	SELECT
 		u.id, u.username, u.email, u.password_hash, u.nombres, u.apellidos,
-		u.activo, u.intentos_fallidos, u.bloqueado_hasta, u.ultimo_acceso,
+		u.activo, u.token_version, u.intentos_fallidos, u.bloqueado_hasta, u.ultimo_acceso,
 		u.created_at, u.updated_at,
 		COALESCE(array_agg(DISTINCT r.codigo) FILTER (WHERE r.codigo IS NOT NULL), '{}') AS roles,
 		COALESCE(array_agg(DISTINCT p.codigo) FILTER (WHERE p.codigo IS NOT NULL), '{}') AS permisos
@@ -128,12 +128,13 @@ func (s *UsuarioStore) Actualizar(ctx context.Context, u *entities.Usuario, pass
 			nombres = $3,
 			apellidos = $4,
 			activo = $5,
-			password_hash = COALESCE(NULLIF($6, ''), password_hash)
+			password_hash = COALESCE(NULLIF($6, ''), password_hash),
+			token_version = token_version + CASE WHEN $7 THEN 1 ELSE 0 END
 		WHERE id = $1
 		RETURNING id`
 	var id int64
 	err = tx.QueryRow(ctx, updateUsuario,
-		u.ID, u.Email, u.Nombres, u.Apellidos, u.Activo, passwordHash,
+		u.ID, u.Email, u.Nombres, u.Apellidos, u.Activo, passwordHash, revocarSesiones,
 	).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return noEncontrado("usuario", u.ID)
@@ -190,11 +191,42 @@ func (s *UsuarioStore) RegistrarIntentoFallido(ctx context.Context, id int64, in
 }
 
 func (s *UsuarioStore) RevocarSesiones(ctx context.Context, usuarioID int64) error {
-	_, err := s.db.Exec(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return mapError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE usuarios
+		SET token_version = token_version + 1
+		WHERE id = $1`, usuarioID)
+	if err != nil {
+		return mapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return noEncontrado("usuario", usuarioID)
+	}
+	if _, err := tx.Exec(ctx, `
 		UPDATE refresh_tokens
 		SET revocado_en = now()
-		WHERE usuario_id = $1 AND revocado_en IS NULL`, usuarioID)
-	return mapError(err)
+		WHERE usuario_id = $1 AND revocado_en IS NULL`, usuarioID); err != nil {
+		return mapError(err)
+	}
+	return mapError(tx.Commit(ctx))
+}
+
+func (s *UsuarioStore) SesionValida(ctx context.Context, usuarioID int64, tokenVersion int) (bool, error) {
+	const q = `
+		SELECT EXISTS (
+			SELECT 1 FROM usuarios
+			WHERE id = $1 AND activo AND token_version = $2
+		)`
+	var valida bool
+	if err := s.db.QueryRow(ctx, q, usuarioID, tokenVersion).Scan(&valida); err != nil {
+		return false, mapError(err)
+	}
+	return valida, nil
 }
 
 func (s *UsuarioStore) Desbloquear(ctx context.Context, id int64) error {
@@ -216,7 +248,7 @@ func scanUsuario(row rowScanner) (*entities.Usuario, error) {
 	var bloqueadoHasta, ultimoAcceso pgtype.Timestamptz
 	err := row.Scan(
 		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Nombres, &u.Apellidos,
-		&u.Activo, &u.IntentosFallidos, &bloqueadoHasta, &ultimoAcceso,
+		&u.Activo, &u.TokenVersion, &u.IntentosFallidos, &bloqueadoHasta, &ultimoAcceso,
 		&u.CreatedAt, &u.UpdatedAt, &u.Roles, &u.Permisos,
 	)
 	if err != nil {

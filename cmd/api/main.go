@@ -17,15 +17,20 @@ import (
 
 func main() {
 	cfg := config.Load()
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: cfg.LogLevel(),
-	}))
+	opts := &slog.HandlerOptions{Level: cfg.LogLevel()}
+	var handler slog.Handler
+	if cfg.LogFormat == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+	logger := slog.New(handler).With("service", cfg.ServiceName, "env", cfg.Env)
 
 	if err := cfg.Validate(); err != nil {
 		logger.Error("configuración de seguridad inválida", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("iniciando MediList API", "env", cfg.Env)
+	logger.Info("iniciando MediList API")
 
 	ctx := context.Background()
 
@@ -46,6 +51,7 @@ func main() {
 	rolStore := postgres.NewRolStore(pool)
 	refreshTokenStore := postgres.NewRefreshTokenStore(pool)
 	auditoriaStore := postgres.NewAuditoriaStore(pool)
+	errorStore := postgres.NewErrorStore(pool)
 
 	// Servicios (lógica de negocio)
 	especialidadService := service.NewEspecialidadService(especialidadStore)
@@ -64,6 +70,7 @@ func main() {
 	}, usuarioStore, refreshTokenStore, auditoriaStore)
 	usuarioService := service.NewUsuarioService(usuarioStore, rolStore, cfg.BcryptCost)
 	auditoriaService := service.NewAuditoriaService(auditoriaStore)
+	errorService := service.NewErrorService(errorStore, cfg.ServiceName, logger)
 
 	// Transporte (HTTP)
 	router := httpapi.NewRouter(httpapi.Dependencies{
@@ -75,6 +82,7 @@ func main() {
 		Usuarios:       usuarioService,
 		Auditoria:      auditoriaService,
 		AuditoriaStore: auditoriaStore,
+		Errores:        errorService,
 		DB:             pool,
 		Logger:         logger,
 	})

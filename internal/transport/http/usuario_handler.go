@@ -22,7 +22,7 @@ func (h *UsuarioHandler) Listar(w http.ResponseWriter, r *http.Request) {
 	opts := listOptions(r)
 	lista, err := h.svc.Listar(r.Context(), opts)
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	resp := make([]usuarioResponse, 0, len(lista))
@@ -35,7 +35,7 @@ func (h *UsuarioHandler) Listar(w http.ResponseWriter, r *http.Request) {
 func (h *UsuarioHandler) Crear(w http.ResponseWriter, r *http.Request) {
 	var req crearUsuarioRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	usuario, err := h.svc.Crear(r.Context(), service.CrearUsuarioInput{
@@ -47,7 +47,7 @@ func (h *UsuarioHandler) Crear(w http.ResponseWriter, r *http.Request) {
 		Roles:     req.Roles,
 	})
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	writeData(w, http.StatusCreated, nuevoUsuarioResponse(*usuario))
@@ -56,12 +56,12 @@ func (h *UsuarioHandler) Crear(w http.ResponseWriter, r *http.Request) {
 func (h *UsuarioHandler) Obtener(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	usuario, err := h.svc.Obtener(r.Context(), id)
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	writeData(w, http.StatusOK, nuevoUsuarioResponse(*usuario))
@@ -70,7 +70,7 @@ func (h *UsuarioHandler) Obtener(w http.ResponseWriter, r *http.Request) {
 func (h *UsuarioHandler) Actualizar(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	claims := claimsFromContext(r.Context())
@@ -80,7 +80,7 @@ func (h *UsuarioHandler) Actualizar(w http.ResponseWriter, r *http.Request) {
 	}
 	var req actualizarUsuarioRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	usuario, err := h.svc.Actualizar(r.Context(), id, service.ActualizarUsuarioInput{
@@ -92,7 +92,7 @@ func (h *UsuarioHandler) Actualizar(w http.ResponseWriter, r *http.Request) {
 		Password:  req.Password,
 	}, claims.UsuarioID)
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	writeData(w, http.StatusOK, nuevoUsuarioResponse(*usuario))
@@ -101,11 +101,24 @@ func (h *UsuarioHandler) Actualizar(w http.ResponseWriter, r *http.Request) {
 func (h *UsuarioHandler) Desbloquear(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	if err := h.svc.Desbloquear(r.Context(), id); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *UsuarioHandler) RevocarSesiones(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+	if err := h.svc.RevocarSesiones(r.Context(), id); err != nil {
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -114,7 +127,7 @@ func (h *UsuarioHandler) Desbloquear(w http.ResponseWriter, r *http.Request) {
 func (h *UsuarioHandler) ListarRoles(w http.ResponseWriter, r *http.Request) {
 	roles, err := h.svc.ListarRoles(r.Context())
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	resp := make([]rolResponse, 0, len(roles))

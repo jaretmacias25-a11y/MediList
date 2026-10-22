@@ -54,6 +54,7 @@ type UsuarioStore interface {
 	RegistrarIntentoFallido(ctx context.Context, id int64, intentos int, bloqueadoHasta *time.Time) error
 	RevocarSesiones(ctx context.Context, usuarioID int64) error
 	Desbloquear(ctx context.Context, id int64) error
+	SesionValida(ctx context.Context, usuarioID int64, tokenVersion int) (bool, error)
 }
 
 // RolStore es el puerto de consulta de roles y permisos.
@@ -74,4 +75,10 @@ type RefreshTokenStore interface {
 type AuditoriaStore interface {
 	Registrar(ctx context.Context, a *entities.Auditoria) error
 	Listar(ctx context.Context, filtro entities.AuditoriaFiltro) ([]entities.Auditoria, error)
+}
+
+// ErrorStore es el puerto de registro y consulta de errores agregados.
+type ErrorStore interface {
+	Registrar(ctx context.Context, e *entities.ErrorAplicacion) error
+	Listar(ctx context.Context, filtro entities.ErrorFiltro) ([]entities.ErrorAplicacion, error)
 }

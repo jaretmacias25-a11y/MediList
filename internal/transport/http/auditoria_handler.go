@@ -36,7 +36,7 @@ func (h *AuditoriaHandler) Listar(w http.ResponseWriter, r *http.Request) {
 
 	lista, err := h.svc.Listar(r.Context(), filtro)
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	resp := make([]auditoriaResponse, 0, len(lista))

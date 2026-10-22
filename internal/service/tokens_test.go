@@ -12,10 +12,11 @@ import (
 func TestTokenManagerGenerarValidar(t *testing.T) {
 	manager := NewTokenManager(strings.Repeat("s", 64), "medilist", time.Minute)
 	usuario := &entities.Usuario{
-		ID:       7,
-		Username: "ana",
-		Roles:    []string{"medico"},
-		Permisos: []string{"citas:leer"},
+		ID:           7,
+		Username:     "ana",
+		TokenVersion: 4,
+		Roles:        []string{"medico"},
+		Permisos:     []string{"citas:leer"},
 	}
 
 	token, expira, err := manager.Generar(usuario)
@@ -35,6 +36,9 @@ func TestTokenManagerGenerarValidar(t *testing.T) {
 	}
 	if claims.UsuarioID != usuario.ID || claims.Username != usuario.Username {
 		t.Fatalf("claims inesperados: %+v", claims)
+	}
+	if claims.TokenVersion != usuario.TokenVersion {
+		t.Fatalf("versión de token inesperada: %d", claims.TokenVersion)
 	}
 	if len(claims.Roles) != 1 || claims.Roles[0] != "medico" {
 		t.Fatalf("roles inesperados: %v", claims.Roles)

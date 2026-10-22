@@ -33,7 +33,7 @@ func auditMutations(store service.AuditoriaStore, logger *slog.Logger, next http
 		entrada := &entities.Auditoria{
 			UsuarioID:  &claims.UsuarioID,
 			Username:   claims.Username,
-			Accion:     accionDeMetodo(r.Method),
+			Accion:     accionDeSolicitud(r),
 			Recurso:    recursoDeRuta(r.URL.Path),
 			Metodo:     r.Method,
 			Ruta:       r.URL.Path,
@@ -48,6 +48,18 @@ func auditMutations(store service.AuditoriaStore, logger *slog.Logger, next http
 			logger.Error("no se pudo registrar la auditoría", "error", err)
 		}
 	})
+}
+
+func accionDeSolicitud(r *http.Request) string {
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/revocar-sesiones"):
+		return "revocar_sesiones"
+	case strings.HasSuffix(r.URL.Path, "/desbloquear"):
+		return "desbloquear"
+	case strings.HasSuffix(r.URL.Path, "/estado"):
+		return "cambiar_estado"
+	}
+	return accionDeMetodo(r.Method)
 }
 
 func accionDeMetodo(method string) string {

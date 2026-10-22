@@ -17,6 +17,8 @@ type Config struct {
 	Env         string
 	HTTPPort    string
 	DatabaseURL string
+	LogFormat   string
+	ServiceName string
 
 	JWTSecret string
 	JWTIssuer string
@@ -37,6 +39,8 @@ func Load() Config {
 		Env:              env,
 		HTTPPort:         strings.TrimPrefix(getenv("HTTP_PORT", "8080"), ":"),
 		DatabaseURL:      getenv("DATABASE_URL", "postgres://postgres:CAMBIAR_PASSWORD@localhost:5432/medilist?sslmode=disable"),
+		LogFormat:        strings.ToLower(getenv("LOG_FORMAT", "text")),
+		ServiceName:      getenv("APP_SERVICE_NAME", "medilist-api"),
 		JWTSecret:        getenv("JWT_SECRET", devJWTSecret),
 		JWTIssuer:        getenv("JWT_ISSUER", "medilist"),
 		AccessTokenTTL:   time.Duration(getenvInt("ACCESS_TOKEN_MINUTES", 15)) * time.Minute,
@@ -49,6 +53,12 @@ func Load() Config {
 
 // Validate comprueba que la configuración de seguridad sea segura.
 func (c Config) Validate() error {
+	if c.LogFormat != "text" && c.LogFormat != "json" {
+		return fmt.Errorf("LOG_FORMAT debe ser text o json")
+	}
+	if strings.TrimSpace(c.ServiceName) == "" {
+		return fmt.Errorf("APP_SERVICE_NAME no puede estar vacío")
+	}
 	if len(c.JWTSecret) < 32 {
 		return fmt.Errorf("JWT_SECRET debe tener al menos 32 caracteres")
 	}

@@ -44,6 +44,7 @@ MediList/
 │   │   ├── entities/                   # entidades del dominio
 │   │   ├── ports.go                    # interfaces de repositorio
 │   │   ├── auth_service.go             # login, refresh, bloqueo, cambio de clave
+│   │   ├── error_service.go            # errores agregados (stdout + PostgreSQL)
 │   │   ├── password.go                 # bcrypt y política de contraseñas
 │   │   ├── tokens.go                   # emisión y validación JWT
 │   │   ├── usuario_service.go          # usuarios, roles y auditoría
@@ -51,14 +52,17 @@ MediList/
 │   ├── repository/postgres/
 │   │   ├── db.go                       # pool pgx
 │   │   ├── errors.go                   # traducción de errores SQL
-│   │   ├── usuario_store.go            # usuarios, roles y bloqueos
+│   │   ├── usuario_store.go            # usuarios, roles, bloqueos y token_version
 │   │   ├── refresh_token_store.go      # refresh tokens hasheados
 │   │   ├── auditoria_store.go          # bitácora
+│   │   ├── error_store.go              # errores agregados
 │   │   └── *_store.go                  # almacenes clínicos
 │   └── transport/http/
 │       ├── router.go                   # rutas y health check
-│       ├── auth_middleware.go          # Bearer token y permisos
+│       ├── auth_middleware.go          # Bearer token, sesión y permisos
 │       ├── audit.go                    # auditoría automática de escrituras
+│       ├── request_context.go          # X-Request-ID y trace_id
+│       ├── report_error.go             # envío de errores a la agregación
 │       ├── rate_limit.go               # límite de intentos por IP
 │       ├── middleware.go               # logging, recovery y cabeceras
 │       ├── dto.go                      # contratos JSON clínicos
@@ -68,7 +72,9 @@ MediList/
 │   ├── 001_init.sql                    # tablas clínicas, índices y triggers
 │   ├── 002_seed.sql                    # especialidades iniciales
 │   ├── 003_auth.sql                    # usuarios, roles, permisos, tokens y auditoría
-│   └── 004_auth_seed.sql               # roles, permisos y admin inicial
+│   ├── 004_auth_seed.sql               # roles, permisos y admin inicial
+│   ├── 005_token_version.sql           # versión de sesión para revocación inmediata
+│   └── 006_errores.sql                 # errores agregados y permiso errores:leer
 ├── scripts/
 │   ├── migrate.ps1                     # crea BD y aplica migraciones
 │   └── run.ps1                         # inicia la API
@@ -92,7 +98,9 @@ MediList/
 
    ```env
    APP_ENV=development
+   APP_SERVICE_NAME=medilist-api
    HTTP_PORT=8080
+   LOG_FORMAT=json
    DATABASE_URL=postgres://postgres:TU_PASSWORD_LOCAL@localhost:5432/medilist?sslmode=disable
 
    JWT_SECRET=CAMBIAR_POR_UN_SECRETO_ALEATORIO_DE_AL_MENOS_32_CARACTERES
@@ -160,6 +168,7 @@ Base URL: `http://localhost:8080/api/v1`
 4. Cuando el access token expire, usa `POST /auth/refresh` con el refresh token.
 5. El refresh token rota en cada uso: el anterior queda revocado.
 6. `POST /auth/logout` revoca el refresh token activo.
+7. Cada request protegido verifica en PostgreSQL que la cuenta siga activa y que `token_version` coincida con el claim `ver`. Si cambian roles, contraseña, estado o se revocan sesiones, los access tokens anteriores dejan de funcionar de inmediato.
 
 ### Endpoints de autenticación
 
@@ -216,7 +225,7 @@ Invoke-RestMethod -Method Post `
   } | ConvertTo-Json)
 ```
 
-La nueva contraseña debe tener al menos 12 caracteres e incluir mayúscula, minúscula, número y carácter especial. Al cambiarla se revocan todos los refresh tokens.
+La nueva contraseña debe tener al menos 12 caracteres e incluir mayúscula, minúscula, número y carácter especial. Al cambiarla se incrementa `token_version` y se revocan todos los refresh tokens, por lo que el access token anterior también queda inválido de inmediato.
 
 ---
 
@@ -250,6 +259,7 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 | Usuarios (escribir) | Sí | No | No | No | No |
 | Roles (leer) | Sí | No | No | No | Sí |
 | Auditoría (leer) | Sí | No | No | No | Sí |
+| Errores (leer) | Sí | No | No | No | Sí |
 
 ### Administración de usuarios
 
@@ -262,8 +272,10 @@ Solo usuarios con `usuarios:leer` o `usuarios:escribir` pueden acceder.
 | `GET` | `/usuarios/{id}` | `usuarios:leer` | Obtiene un usuario |
 | `PUT` | `/usuarios/{id}` | `usuarios:escribir` | Actualiza datos, roles, estado o contraseña |
 | `POST` | `/usuarios/{id}/desbloquear` | `usuarios:escribir` | Limpia el bloqueo por intentos fallidos |
+| `POST` | `/usuarios/{id}/revocar-sesiones` | `usuarios:escribir` | Invalida de inmediato access y refresh tokens |
 | `GET` | `/roles` | `roles:leer` | Lista roles y sus permisos |
 | `GET` | `/auditoria` | `auditoria:leer` | Consulta la bitácora |
+| `GET` | `/errores` | `errores:leer` | Consulta errores agregados |
 
 Crear un usuario:
 
@@ -285,7 +297,8 @@ Notas:
 
 - El `username` es inmutable después de crear la cuenta.
 - No puedes desactivar tu propia cuenta ni quitarte el rol `admin` a ti mismo.
-- Si cambian los roles, la contraseña o se desactiva la cuenta, se revocan todos los refresh tokens del usuario.
+- Si cambian los roles, la contraseña o se desactiva la cuenta, se revocan todos los refresh tokens y se incrementa `token_version`; los access tokens anteriores fallan con `401`.
+- `POST /usuarios/{id}/revocar-sesiones` permite a un administrador forzar el cierre inmediato de todas las sesiones de una cuenta.
 - El endpoint de desbloqueo permite rehabilitar una cuenta bloqueada por intentos fallidos.
 
 ---
@@ -360,6 +373,27 @@ Se registran:
 
 No se almacenan contraseñas, tokens ni cuerpos de solicitud en la bitácora.
 
+### Observabilidad y agregación de errores
+
+La API está preparada para un agregador de logs (Loki, ELK/OpenSearch, CloudWatch, Datadog, etc.):
+
+- **Logs estructurados JSON:** con `LOG_FORMAT=json` cada línea incluye `time`, `level`, `msg`, `service`, `env` y, en las solicitudes, `trace_id`, `method`, `path`, `status`, `duration_ms` y `usuario`.
+- **Correlación:** cada request recibe un `X-Request-ID`. Si el cliente envía uno válido se respeta; si no, se genera. El valor vuelve en la cabecera `X-Request-ID` y en `request_id` dentro de las respuestas de error.
+- **Errores agregados:** los errores internos (`5xx`) y los pánicos recuperados se guardan en `errores_aplicacion` con `trace_id`, `servicio`, `componente`, ruta, método, estado, código, mensaje, usuario, IP, user agent y stack trace. La escritura es *best-effort* (timeout de 2 s) y nunca reemplaza la respuesta original.
+- **Doble destino:** el mismo error se emite a stdout (para que lo recolecte el agente de logs) y a PostgreSQL (para consulta y auditoría desde la API). Ambos se correlacionan por `trace_id`.
+- **Microservicios:** configura un `APP_SERVICE_NAME` distinto por servicio, propaga `X-Request-ID` en las llamadas salientes y envía el stdout JSON al mismo agregador. El agregador puede reconstruir una transacción completa agrupando por `trace_id`; el campo `componente` identifica la capa (`http`, `worker`, etc.).
+- **Consulta:** `GET /api/v1/errores` con permiso `errores:leer` (admin y auditor). Filtros: `nivel`, `servicio`, `trace_id`, `search`, `limit`, `offset`.
+
+Ejemplo de consulta:
+
+```powershell
+$errores = Invoke-RestMethod -Method Get `
+  -Uri "http://localhost:8080/api/v1/errores?nivel=error&limit=20" `
+  -Headers $headers
+```
+
+Para producción, envía el stdout JSON al agregador, define retención para `errores_aplicacion` y `auditoria`, y alerta sobre incrementos de `nivel=error` o sobre `estado_http=500`. No se registran contraseñas, tokens ni cuerpos de solicitud; aun así, restringe el acceso a `errores:leer` porque los mensajes pueden incluir detalles internos de SQL.
+
 ---
 
 ## Formato de respuesta
@@ -386,16 +420,19 @@ Errores:
   "error": {
     "code": "validation_error",
     "message": "fecha_hora_inicio no puede estar en el pasado"
-  }
+  },
+  "request_id": "07882f7de83c103cd94b29005fb1954a"
 }
 ```
+
+El `request_id` también se devuelve en la cabecera `X-Request-ID` y permite correlacionar el error con los logs y con la tabla `errores_aplicacion`.
 
 Códigos:
 
 | Código | Significado |
 |---|---|
 | `400` | Validación |
-| `401` | Token ausente, inválido o credenciales incorrectas |
+| `401` | Token ausente, inválido, expirado o sesión revocada |
 | `403` | Sin permiso para el recurso |
 | `404` | No encontrado |
 | `409` | Conflicto (documento duplicado, solape de agenda) |
@@ -498,6 +535,7 @@ Invoke-RestMethod -Uri http://localhost:8080/api/v1/citas/1/estado `
 | RolPermiso | `rol_permisos` | `RolStore` |
 | RefreshToken | `refresh_tokens` | `RefreshTokenStore` |
 | Auditoría | `auditoria` | `AuditoriaStore` |
+| ErrorAplicacion | `errores_aplicacion` | `ErrorStore` |
 
 El resto del modelo (historia clínica, hospitalización, farmacia, facturación) puede agregarse replicando el patrón: entidad en `service/entities`, puerto en `service/ports.go`, caso de uso en `service`, almacén en `repository/postgres` y handler en `transport/http`.
 
@@ -509,11 +547,12 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 4. La fecha de una cita nueva no puede estar en el pasado.
 5. Las transiciones de estado se validan en el dominio, no en el handler.
 6. Las citas se **cancelan**, no se eliminan; los pacientes y médicos tienen **baja lógica**.
-7. Los errores SQL (`unique_violation`, `foreign_key_violation`, `check_violation`) se traducen a errores de dominio.
+7. Los errores SQL (`unique_violation`, `foreign_key_violation`, `check_violation`, longitud excedida, nulabilidad y formato inválido) se traducen a errores de dominio.
 8. `updated_at` se actualiza automáticamente mediante triggers de PostgreSQL.
 9. Un usuario bloqueado no puede iniciar sesión hasta que expire el bloqueo o un administrador lo desbloquee.
 10. El refresh token se guarda como hash SHA-256; nunca en texto plano.
 11. La reutilización de un refresh token revocado revoca todas las sesiones del usuario.
+12. Cada access token incluye la versión de sesión (`ver`); si no coincide con `usuarios.token_version`, se rechaza aunque la firma sea válida.
 
 ## Seguridad implementada
 
@@ -525,19 +564,20 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - **RBAC:** permisos por recurso y acción, verificados en el middleware antes de llegar al handler.
 - **Auditoría:** logins, bloqueos, refresh, cambios de contraseña, escrituras y accesos denegados.
 - **Datos en tránsito y caché:** `Cache-Control: no-store`, `Pragma: no-cache`, CSP, `X-Frame-Options: DENY`, `nosniff` y política de permisos restrictiva.
-- **Entradas:** límite de cuerpo JSON de 1 MiB, `DisallowUnknownFields`, consultas SQL parametrizadas.
+- **Entradas:** límite de cuerpo JSON de 1 MiB, `DisallowUnknownFields`, consultas SQL parametrizadas y traducción de errores de longitud/formato a `400`.
 - **Secretos:** `.env` está en `.gitignore`; usa `.env.example` como plantilla.
-- **Sesiones:** al desactivar una cuenta, cambiar roles o cambiar contraseña se revocan los refresh tokens.
+- **Sesiones:** al desactivar una cuenta, cambiar roles, cambiar contraseña o llamar a `revocar-sesiones` se incrementa `token_version`; el access token anterior falla de inmediato y los refresh tokens quedan revocados.
+- **Observabilidad:** logs JSON, `X-Request-ID`/`trace_id`, tabla `errores_aplicacion` y endpoint restringido `GET /errores`.
 
 ### Límites y recomendaciones para producción
 
-- El access token conserva los permisos vigentes al momento de emitirse. Si cambias roles, el cambio aplica plenamente al renovar el token (máximo 15 minutos). Para revocación inmediata, agrega una versión de token verificada en base de datos.
+- El middleware de autenticación consulta `usuarios.token_version` en cada request protegido para lograr revocación inmediata. Es una consulta indexada por clave primaria; si el volumen lo exige, evalúa una caché con invalidación explícita, nunca con TTL largo.
 - La API no implementa TLS por sí misma: publícala detrás de un reverse proxy con HTTPS.
 - Para desarrollo se usa el usuario `postgres`. En producción crea un rol de base de datos con privilegios mínimos (solo DML sobre las tablas necesarias) y no uses superusuario.
 - No hay CORS configurado. Si la API se consume desde un frontend en otro origen, agrega un middleware con una lista blanca de orígenes.
 - No hay MFA, recuperación de contraseña por correo ni cifrado de campos a nivel de aplicación. Evalúa `pgcrypto` o cifrado de disco según el marco regulatorio aplicable.
 - La validación de solape se hace en la capa de servicio. Para alta concurrencia, agrega una restricción de exclusión en PostgreSQL o un advisory lock por médico.
-- Programa la limpieza periódica de `refresh_tokens` expirados y define retención para `auditoria`.
+- Programa la limpieza periódica de `refresh_tokens` expirados y define retención para `auditoria` y `errores_aplicacion`. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.
 
 ## Próximos pasos sugeridos
 

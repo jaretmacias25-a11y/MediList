@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"time"
+
+	"medilist/internal/service"
 )
 
 type responseRecorder struct {
@@ -31,8 +34,11 @@ func (r *responseRecorder) Unwrap() http.ResponseWriter {
 	return r.ResponseWriter
 }
 
-func withMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
-	return recoverPanic(logger, logRequests(logger, securityHeaders(next)))
+func withMiddleware(next http.Handler, logger *slog.Logger, errores *service.ErrorService) http.Handler {
+	// requestID es el más externo para que el trace_id esté disponible también
+	// durante la recuperación de pánicos y el log de acceso. logRequests queda
+	// fuera de recoverPanic para registrar también las solicitudes que fallan.
+	return requestID(withErrorService(errores, logRequests(logger, recoverPanic(logger, securityHeaders(next)))))
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -58,12 +64,20 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 		if status == 0 {
 			status = http.StatusOK
 		}
+		traceID := ""
+		username := ""
+		if meta := requestMetaFromContext(r.Context()); meta != nil {
+			traceID = meta.ID
+			username = meta.Username
+		}
 		logger.Info("solicitud HTTP",
+			"trace_id", traceID,
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"remote", r.RemoteAddr,
+			"usuario", username,
 		)
 	})
 }
@@ -72,12 +86,9 @@ func recoverPanic(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				logger.Error("panic recuperado",
-					"error", rec,
-					"path", r.URL.Path,
-					"stack", string(debug.Stack()),
-				)
 				writeError(w, http.StatusInternalServerError, "internal_error", "error interno del servidor")
+				reportarError(r, logger, http.StatusInternalServerError, "panic",
+					"pánico recuperado", fmt.Errorf("%v", rec), string(debug.Stack()))
 			}
 		}()
 		next.ServeHTTP(w, r)

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -37,10 +38,18 @@ func (m *AuthMiddleware) Require(permission string, next http.Handler) http.Hand
 			return
 		}
 
-		claims, err := m.auth.ValidarToken(strings.TrimSpace(partes[1]))
+		claims, err := m.auth.ValidarSesion(r.Context(), strings.TrimSpace(partes[1]))
 		if err != nil {
-			writeUnauthorized(w)
+			if errors.Is(err, entities.ErrUnauthorized) {
+				writeUnauthorized(w)
+				return
+			}
+			m.logger.Error("no se pudo validar la sesión", "error", err)
+			writeServiceError(w, r, m.logger, err)
 			return
+		}
+		if meta := requestMetaFromContext(r.Context()); meta != nil {
+			meta.Username = claims.Username
 		}
 
 		if permission != "" && !tienePermiso(claims, permission) {

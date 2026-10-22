@@ -40,12 +40,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	var req loginRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	sesion, err := h.svc.Login(r.Context(), req.Username, req.Password, clientIP(r), r.UserAgent())
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	writeData(w, http.StatusOK, nuevaSesionResponse(*sesion))
@@ -61,12 +61,12 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	var req refreshTokenRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	sesion, err := h.svc.Refresh(r.Context(), req.RefreshToken, clientIP(r), r.UserAgent())
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	writeData(w, http.StatusOK, nuevaSesionResponse(*sesion))
@@ -75,11 +75,11 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	var req refreshTokenRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	if err := h.svc.Logout(r.Context(), req.RefreshToken, clientIP(r), r.UserAgent()); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -93,7 +93,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	usuario, err := h.svc.Me(r.Context(), claims.UsuarioID)
 	if err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	writeData(w, http.StatusOK, nuevoUsuarioResponse(*usuario))
@@ -114,13 +114,13 @@ func (h *AuthHandler) CambiarPassword(w http.ResponseWriter, r *http.Request) {
 
 	var req cambiarPasswordRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	if err := h.svc.CambiarPassword(
 		r.Context(), claims.UsuarioID, req.PasswordActual, req.PasswordNueva, clientIP(r), r.UserAgent(),
 	); err != nil {
-		writeServiceError(w, h.logger, err)
+		writeServiceError(w, r, h.logger, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

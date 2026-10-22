@@ -27,6 +27,12 @@ func mapError(err error) error {
 			return fmt.Errorf("%w: el registro está referenciado por otros datos", entities.ErrConflict)
 		case "23514": // check_violation
 			return fmt.Errorf("%w: %s", entities.ErrValidation, pgErr.Message)
+		case "22001": // string_data_right_truncation
+			return fmt.Errorf("%w: uno o más campos exceden la longitud permitida", entities.ErrValidation)
+		case "23502": // not_null_violation
+			return fmt.Errorf("%w: falta un campo obligatorio", entities.ErrValidation)
+		case "22P02": // invalid_text_representation
+			return fmt.Errorf("%w: uno o más valores tienen un formato inválido", entities.ErrValidation)
 		}
 	}
 	return err

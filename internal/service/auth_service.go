@@ -230,9 +230,27 @@ func (s *AuthService) Me(ctx context.Context, userID int64) (*entities.Usuario, 
 	return usuario, nil
 }
 
-// ValidarToken valida un access token y devuelve sus claims.
+// ValidarToken valida firma y expiración, pero no comprueba revocación.
+// Para autenticar solicitudes usa ValidarSesion.
 func (s *AuthService) ValidarToken(token string) (*Claims, error) {
 	return s.tokens.Validar(token)
+}
+
+// ValidarSesion valida el token y comprueba contra la base de datos que el
+// usuario siga activo y que su versión de sesión no haya sido revocada.
+func (s *AuthService) ValidarSesion(ctx context.Context, token string) (*Claims, error) {
+	claims, err := s.tokens.Validar(token)
+	if err != nil {
+		return nil, err
+	}
+	valida, err := s.usuarios.SesionValida(ctx, claims.UsuarioID, claims.TokenVersion)
+	if err != nil {
+		return nil, err
+	}
+	if !valida {
+		return nil, fmt.Errorf("%w: sesión revocada", entities.ErrUnauthorized)
+	}
+	return claims, nil
 }
 
 // CambiarPassword permite que un usuario autenticado cambie su contraseña.

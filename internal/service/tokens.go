@@ -14,10 +14,11 @@ import (
 
 // Claims contiene la identidad y los permisos embebidos en el token de acceso.
 type Claims struct {
-	UsuarioID int64    `json:"uid"`
-	Username  string   `json:"username"`
-	Roles     []string `json:"roles"`
-	Permisos  []string `json:"permisos"`
+	UsuarioID    int64    `json:"uid"`
+	Username     string   `json:"username"`
+	TokenVersion int      `json:"ver"`
+	Roles        []string `json:"roles"`
+	Permisos     []string `json:"permisos"`
 	jwt.RegisteredClaims
 }
 
@@ -55,10 +56,11 @@ func (m *TokenManager) Generar(u *entities.Usuario) (string, time.Time, error) {
 	}
 
 	claims := Claims{
-		UsuarioID: u.ID,
-		Username:  u.Username,
-		Roles:     roles,
-		Permisos:  permisos,
+		UsuarioID:    u.ID,
+		Username:     u.Username,
+		TokenVersion: u.TokenVersion,
+		Roles:        roles,
+		Permisos:     permisos,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.issuer,
 			Subject:   strconv.FormatInt(u.ID, 10),

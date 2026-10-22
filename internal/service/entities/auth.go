@@ -22,6 +22,7 @@ type Usuario struct {
 	Nombres          string
 	Apellidos        string
 	Activo           bool
+	TokenVersion     int
 	IntentosFallidos int
 	BloqueadoHasta   *time.Time
 	UltimoAcceso     *time.Time

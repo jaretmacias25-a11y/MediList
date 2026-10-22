@@ -31,7 +31,7 @@ Sistema de gestión para hospital / clínica.
 | **ProfesionalSalud** | Empleado habilitado para actos clínicos | `id_profesional` PK, `id_empleado` FK UK, `tipo_profesional` (médico, enfermero, etc.), `numero_licencia` UK, `firma_digital`, `activo` |
 | **Especialidad** | Catálogo de especialidades | `id_especialidad` PK, `codigo` UK, `nombre`, `descripcion` |
 | **ProfesionalEspecialidad** | Relación N:M profesional–especialidad | `id_profesional` FK, `id_especialidad` FK, `principal`, `fecha_certificacion` (PK compuesta) |
-| **Usuario** | Credenciales de acceso | `id_usuario` PK, `id_persona` FK, `username` UK, `password_hash`, `email_verificado`, `ultimo_acceso`, `estado`, `mfa_habilitado` |
+| **Usuario** | Credenciales de acceso | `id_usuario` PK, `id_persona` FK, `username` UK, `password_hash`, `email_verificado`, `ultimo_acceso`, `estado`, `token_version`, `mfa_habilitado` |
 | **Rol / Permiso** | Control de acceso RBAC | `id_rol` PK, `nombre` UK, `descripcion`; `id_permiso` PK, `codigo` UK, `modulo`, `descripcion` |
 | **UsuarioRol / RolPermiso** | Asignaciones N:M con vigencia | claves FK compuestas, `vigente_desde`, `vigente_hasta` |
 
@@ -41,13 +41,14 @@ Esta versión implementa el núcleo de autenticación y autorización con las si
 
 | Tabla | Propósito | Atributos clave |
 |---|---|---|
-| `usuarios` | Cuenta de acceso | `id` PK, `username` UK, `email` UK, `password_hash`, `nombres`, `apellidos`, `activo`, `intentos_fallidos`, `bloqueado_hasta`, `ultimo_acceso` |
+| `usuarios` | Cuenta de acceso | `id` PK, `username` UK, `email` UK, `password_hash`, `nombres`, `apellidos`, `activo`, `token_version`, `intentos_fallidos`, `bloqueado_hasta`, `ultimo_acceso` |
 | `roles` | Agrupación de permisos | `id` PK, `codigo` UK, `nombre`, `descripcion` |
 | `permisos` | Acción autorizable | `id` PK, `codigo` UK, `modulo`, `descripcion` |
 | `usuario_roles` | Asignación N:M usuario–rol | `usuario_id` FK, `rol_id` FK, PK compuesta |
 | `rol_permisos` | Asignación N:M rol–permiso | `rol_id` FK, `permiso_id` FK, PK compuesta |
 | `refresh_tokens` | Sesiones de renovación | `id` PK, `usuario_id` FK, `token_hash` UK, `expira_en`, `revocado_en`, `ip`, `user_agent` |
 | `auditoria` | Bitácora de seguridad | `id` PK, `usuario_id` FK, `username`, `accion`, `recurso`, `metodo`, `ruta`, `estado_http`, `ip`, `user_agent`, `created_at` |
+| `errores_aplicacion` | Errores agregados para observabilidad | `id` PK, `trace_id`, `servicio`, `componente`, `nivel`, `metodo`, `ruta`, `estado_http`, `codigo`, `mensaje`, `usuario_id` FK, `username`, `ip`, `user_agent`, `stack_trace`, `created_at` |
 
 Reglas de seguridad:
 
@@ -57,8 +58,10 @@ Reglas de seguridad:
 4. El access token JWT dura 15 minutos; el refresh token dura 7 días, rota en cada uso y se guarda como hash SHA-256.
 5. La reutilización de un refresh token revocado invalida todas las sesiones del usuario.
 6. Los permisos se validan en el middleware antes de ejecutar el caso de uso.
-7. Los cambios de rol, contraseña o estado revocan los refresh tokens del usuario.
-8. Se auditan inicios de sesión, bloqueos, refresh, cambios de contraseña, escrituras y accesos denegados.
+7. Los cambios de rol, contraseña o estado incrementan `token_version` y revocan los refresh tokens; el access token anterior deja de ser válido de inmediato.
+8. Un administrador puede forzar la revocación inmediata de todas las sesiones de un usuario.
+9. Se auditan inicios de sesión, bloqueos, refresh, cambios de contraseña, escrituras y accesos denegados.
+10. Los errores internos y pánicos se registran con `trace_id` en `errores_aplicacion` y en logs JSON; el mismo identificador se devuelve al cliente en `X-Request-ID` y `request_id`.
 
 ---
 
@@ -160,6 +163,7 @@ Reglas de seguridad:
 |---|---|---|
 | **Notificacion** | Avisos a usuarios | `id_notificacion` PK, `id_usuario` FK, `titulo`, `mensaje`, `tipo`, `leida`, `fecha` |
 | **Auditoria** | Trazabilidad de cambios | `id_auditoria` PK, `id_usuario` FK, `tabla`, `accion`, `registro_id`, `datos_anteriores` JSON, `datos_nuevos` JSON, `ip`, `fecha` |
+| **ErrorAplicacion** | Error correlacionable para agregación de logs | `id_error` PK, `trace_id`, `servicio`, `componente`, `nivel`, `metodo`, `ruta`, `estado_http`, `codigo`, `mensaje`, `id_usuario` FK, `username`, `ip`, `user_agent`, `stack_trace`, `created_at` |
 | **Configuracion** | Parámetros del sistema | `clave` PK, `valor`, `descripcion`, `modulo` |
 
 ---
@@ -208,3 +212,5 @@ erDiagram
 12. **Tokens:** el refresh token se almacena hasheado, rota en cada uso y se revoca al cerrar sesión o cambiar credenciales.
 13. **Mínimo privilegio:** cada rol recibe solo los permisos necesarios para su función.
 14. **Trazabilidad:** toda operación de escritura autenticada y todo intento de acceso denegado queda en `auditoria`.
+15. **Revocación inmediata:** el claim `ver` del JWT debe coincidir con `usuarios.token_version`; cualquier cambio de rol, contraseña, estado o revocación explícita invalida los access tokens vigentes.
+16. **Observabilidad:** los errores internos se escriben simultáneamente en stdout JSON y en `errores_aplicacion`, correlacionados por `trace_id`; nunca incluyen contraseñas, tokens ni cuerpos de solicitud.

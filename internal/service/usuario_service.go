@@ -175,6 +175,14 @@ func (s *UsuarioService) Desbloquear(ctx context.Context, id int64) error {
 	return s.store.Desbloquear(ctx, id)
 }
 
+// RevocarSesiones invalida de inmediato los access tokens y refresh tokens.
+func (s *UsuarioService) RevocarSesiones(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return entities.NewValidationError("id de usuario inválido")
+	}
+	return s.store.RevocarSesiones(ctx, id)
+}
+
 // ListarRoles devuelve el catálogo de roles con sus permisos.
 func (s *UsuarioService) ListarRoles(ctx context.Context) ([]entities.Rol, error) {
 	return s.roles.Listar(ctx)

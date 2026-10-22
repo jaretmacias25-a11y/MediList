@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 
 	"medilist/internal/service/entities"
 )
@@ -15,7 +16,8 @@ type apiError struct {
 }
 
 type errorResponse struct {
-	Error apiError `json:"error"`
+	Error     apiError `json:"error"`
+	RequestID string   `json:"request_id,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -42,11 +44,16 @@ func writeList(w http.ResponseWriter, data any, opts entities.ListOptions, count
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, errorResponse{Error: apiError{Code: code, Message: message}})
+	requestID := w.Header().Get("X-Request-ID")
+	writeJSON(w, status, errorResponse{
+		Error:     apiError{Code: code, Message: message},
+		RequestID: requestID,
+	})
 }
 
-// writeServiceError traduce errores de dominio a códigos HTTP.
-func writeServiceError(w http.ResponseWriter, logger *slog.Logger, err error) {
+// writeServiceError traduce errores de dominio a códigos HTTP y registra los
+// errores internos (5xx) en la agregación de logs.
+func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, entities.ErrValidation):
 		writeError(w, http.StatusBadRequest, "validation_error", err.Error())
@@ -63,7 +70,8 @@ func writeServiceError(w http.ResponseWriter, logger *slog.Logger, err error) {
 	case errors.Is(err, entities.ErrRateLimited):
 		writeError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
 	default:
-		logger.Error("error interno", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "error interno del servidor")
+		reportarError(r, logger, http.StatusInternalServerError, "internal_error",
+			"error interno del servidor", err, string(debug.Stack()))
 	}
 }
