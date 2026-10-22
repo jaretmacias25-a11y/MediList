@@ -84,7 +84,7 @@ MediList/
 
 - Go **1.26** o superior.
 - PostgreSQL **15** o superior en `localhost:5432`.
-- Usuario `postgres` con contraseña `12345` para el entorno local (configurable en `.env`).
+- Usuario local de PostgreSQL con permisos para crear y usar la base `medilist`.
 
 ## Puesta en marcha
 
@@ -93,7 +93,7 @@ MediList/
    ```env
    APP_ENV=development
    HTTP_PORT=8080
-   DATABASE_URL=postgres://postgres:CAMBIAR_PASSWORD@localhost:5432/medilist?sslmode=disable
+   DATABASE_URL=postgres://postgres:TU_PASSWORD_LOCAL@localhost:5432/medilist?sslmode=disable
 
    JWT_SECRET=CAMBIAR_POR_UN_SECRETO_ALEATORIO_DE_AL_MENOS_32_CARACTERES
    JWT_ISSUER=medilist
@@ -103,6 +103,8 @@ MediList/
    MAX_LOGIN_ATTEMPTS=5
    LOCK_MINUTES=15
    ```
+
+   Reemplaza `postgres` y `TU_PASSWORD_LOCAL` por el usuario y la contraseña que tengas configurados en tu propia instalación local de PostgreSQL. No publiques contraseñas reales en el README ni en archivos versionados.
 
    `JWT_SECRET` debe tener al menos 32 caracteres. En producción usa un valor aleatorio y no reutilices el de desarrollo.
 
