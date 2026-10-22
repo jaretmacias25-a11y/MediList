@@ -1,0 +1,14 @@
+# Variables de entorno locales (contienen credenciales)
+.env
+.env.*
+!.env.example
+
+# Binarios y artefactos de Go
+/bin/
+*.exe
+*.test
+coverage.out
+
+# Editor
+.idea/
+.vscode/
