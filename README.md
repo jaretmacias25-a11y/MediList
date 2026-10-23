@@ -720,3 +720,46 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 5. Pruebas de integración con base de datos y pruebas de servicios con almacenes en memoria.
 6. Documentación OpenAPI/Swagger.
 7. Contenerizar la API y agregar pipeline CI.
+
+## Contribuyentes y asistencia
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/jaretmacias25-a11y">
+        <img src="https://github.com/jaretmacias25-a11y.png?size=96" width="80" height="80" alt="Jareth Macias" />
+        <br />
+        <sub><b>Jareth Macias</b></sub>
+      </a>
+      <br />
+      <sub>Autor</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/openai/codex">
+        <img src="https://github.com/openai.png?size=96" width="80" height="80" alt="Codex" />
+        <br />
+        <sub><b>Codex</b></sub>
+      </a>
+      <br />
+      <sub>Asistencia de IA</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/deepseek-ai">
+        <img src="https://github.com/deepseek-ai.png?size=96" width="80" height="80" alt="DeepSeek" />
+        <br />
+        <sub><b>DeepSeek</b></sub>
+      </a>
+      <br />
+      <sub>Asistencia de IA</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/anomalyco/opencode">
+        <img src="https://github.com/anomalyco.png?size=96" width="80" height="80" alt="OpenCode" />
+        <br />
+        <sub><b>OpenCode</b></sub>
+      </a>
+      <br />
+      <sub>Asistencia de IA</sub>
+    </td>
+  </tr>
+</table>
