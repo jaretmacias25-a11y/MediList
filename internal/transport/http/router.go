@@ -87,11 +87,16 @@ func NewRouter(d Dependencies) http.Handler {
 	escritura("POST /api/v1/usuarios/{id}/desbloquear", "usuarios:escribir", uh.Desbloquear)
 	escritura("POST /api/v1/usuarios/{id}/revocar-sesiones", "usuarios:escribir", uh.RevocarSesiones)
 
+	consultaAuditada := func(pattern, permiso string, handler http.HandlerFunc) {
+		mux.Handle(pattern, auth.Require(permiso,
+			auditSensitiveReads(d.AuditoriaStore, d.Logger, handler)))
+	}
+
 	audh := NewAuditoriaHandler(d.Auditoria, d.Logger)
-	protegido("GET /api/v1/auditoria", "auditoria:leer", audh.Listar)
+	consultaAuditada("GET /api/v1/auditoria", "auditoria:leer", audh.Listar)
 
 	erh := NewErrorHandler(d.Errores, d.Logger)
-	protegido("GET /api/v1/errores", "errores:leer", erh.Listar)
+	consultaAuditada("GET /api/v1/errores", "errores:leer", erh.Listar)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "ruta no encontrada")

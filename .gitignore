@@ -2,12 +2,16 @@
 .env
 .env.*
 !.env.example
+!deploy/observability/.env.example
 
 # Binarios y artefactos de Go
 /bin/
 *.exe
 *.test
 coverage.out
+
+# Logs locales que consume Promtail
+/logs/
 
 # Editor
 .idea/

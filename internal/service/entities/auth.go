@@ -56,6 +56,7 @@ type Auditoria struct {
 	EstadoHTTP int
 	IP         string
 	UserAgent  string
+	TraceID    string
 	CreatedAt  time.Time
 }
 
@@ -64,4 +65,5 @@ type AuditoriaFiltro struct {
 	ListOptions
 	UsuarioID int64
 	Accion    string
+	TraceID   string
 }

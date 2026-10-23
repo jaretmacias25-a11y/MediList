@@ -14,11 +14,15 @@ const devJWTSecret = "dev-only-insecure-secret-change-me-please-0123456789"
 
 // Config contiene la configuración de la aplicación.
 type Config struct {
-	Env         string
-	HTTPPort    string
-	DatabaseURL string
-	LogFormat   string
-	ServiceName string
+	Env            string
+	HTTPPort       string
+	DatabaseURL    string
+	LogFormat      string
+	LogFile        string
+	LogFileMaxMB   int
+	LogFileBackups int
+	ServiceName    string
+	InstanceID     string
 
 	JWTSecret string
 	JWTIssuer string
@@ -28,6 +32,10 @@ type Config struct {
 	BcryptCost       int
 	MaxLoginAttempts int
 	LockoutDuration  time.Duration
+
+	RetentionInterval time.Duration
+	ErrorRetention    time.Duration
+	AuditRetention    time.Duration
 }
 
 // Load lee .env (sin sobrescribir variables del sistema) y las variables de entorno.
@@ -40,7 +48,11 @@ func Load() Config {
 		HTTPPort:         strings.TrimPrefix(getenv("HTTP_PORT", "8080"), ":"),
 		DatabaseURL:      getenv("DATABASE_URL", "postgres://postgres:CAMBIAR_PASSWORD@localhost:5432/medilist?sslmode=disable"),
 		LogFormat:        strings.ToLower(getenv("LOG_FORMAT", "text")),
-		ServiceName:      getenv("APP_SERVICE_NAME", "medilist-api"),
+		LogFile:          strings.TrimSpace(getenv("LOG_FILE", "")),
+		LogFileMaxMB:     getenvInt("LOG_FILE_MAX_MB", 100),
+		LogFileBackups:   getenvInt("LOG_FILE_BACKUPS", 5),
+		ServiceName:      strings.TrimSpace(getenv("APP_SERVICE_NAME", "medilist-api")),
+		InstanceID:       strings.TrimSpace(getenv("APP_INSTANCE_ID", defaultInstanceID())),
 		JWTSecret:        getenv("JWT_SECRET", devJWTSecret),
 		JWTIssuer:        getenv("JWT_ISSUER", "medilist"),
 		AccessTokenTTL:   time.Duration(getenvInt("ACCESS_TOKEN_MINUTES", 15)) * time.Minute,
@@ -48,6 +60,10 @@ func Load() Config {
 		BcryptCost:       getenvInt("BCRYPT_COST", 12),
 		MaxLoginAttempts: getenvInt("MAX_LOGIN_ATTEMPTS", 5),
 		LockoutDuration:  time.Duration(getenvInt("LOCK_MINUTES", 15)) * time.Minute,
+
+		RetentionInterval: time.Duration(getenvInt("RETENTION_INTERVAL_HOURS", 24)) * time.Hour,
+		ErrorRetention:    time.Duration(getenvInt("ERROR_RETENTION_DAYS", 90)) * 24 * time.Hour,
+		AuditRetention:    time.Duration(getenvInt("AUDIT_RETENTION_DAYS", 365)) * 24 * time.Hour,
 	}
 }
 
@@ -56,8 +72,46 @@ func (c Config) Validate() error {
 	if c.LogFormat != "text" && c.LogFormat != "json" {
 		return fmt.Errorf("LOG_FORMAT debe ser text o json")
 	}
-	if strings.TrimSpace(c.ServiceName) == "" {
+	if c.Env == "production" && c.LogFormat != "json" {
+		return fmt.Errorf("LOG_FORMAT debe ser json en producción para la agregación de logs")
+	}
+	if c.LogFile != "" {
+		if c.LogFormat != "json" {
+			return fmt.Errorf("LOG_FILE requiere LOG_FORMAT=json para la agregación")
+		}
+		if c.LogFileMaxMB < 1 || c.LogFileMaxMB > 1024 {
+			return fmt.Errorf("LOG_FILE_MAX_MB debe estar entre 1 y 1024")
+		}
+		if c.LogFileBackups < 1 || c.LogFileBackups > 20 {
+			return fmt.Errorf("LOG_FILE_BACKUPS debe estar entre 1 y 20")
+		}
+	}
+	if c.ServiceName == "" {
 		return fmt.Errorf("APP_SERVICE_NAME no puede estar vacío")
+	}
+	if len(c.ServiceName) > 80 {
+		return fmt.Errorf("APP_SERVICE_NAME no puede superar 80 caracteres")
+	}
+	if c.InstanceID == "" {
+		return fmt.Errorf("APP_INSTANCE_ID no puede estar vacío")
+	}
+	if len(c.InstanceID) > 120 {
+		return fmt.Errorf("APP_INSTANCE_ID no puede superar 120 caracteres")
+	}
+	if c.RetentionInterval < time.Hour || c.RetentionInterval > 7*24*time.Hour {
+		return fmt.Errorf("RETENTION_INTERVAL_HOURS debe estar entre 1 y 168")
+	}
+	if c.ErrorRetention < 0 || (c.ErrorRetention > 0 && c.ErrorRetention < 7*24*time.Hour) {
+		return fmt.Errorf("ERROR_RETENTION_DAYS debe ser 0 o al menos 7")
+	}
+	if c.ErrorRetention > 3650*24*time.Hour {
+		return fmt.Errorf("ERROR_RETENTION_DAYS no puede superar 3650")
+	}
+	if c.AuditRetention < 0 || (c.AuditRetention > 0 && c.AuditRetention < 30*24*time.Hour) {
+		return fmt.Errorf("AUDIT_RETENTION_DAYS debe ser 0 o al menos 30")
+	}
+	if c.AuditRetention > 3650*24*time.Hour {
+		return fmt.Errorf("AUDIT_RETENTION_DAYS no puede superar 3650")
 	}
 	if len(c.JWTSecret) < 32 {
 		return fmt.Errorf("JWT_SECRET debe tener al menos 32 caracteres")
@@ -88,6 +142,14 @@ func (c Config) LogLevel() slog.Level {
 		return slog.LevelInfo
 	}
 	return slog.LevelDebug
+}
+
+func defaultInstanceID() string {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		return "desconocido"
+	}
+	return strings.TrimSpace(hostname)
 }
 
 func getenv(key, fallback string) string {

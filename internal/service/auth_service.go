@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"medilist/internal/observability"
 	"medilist/internal/service/entities"
 )
 
@@ -337,8 +338,12 @@ func (s *AuthService) auditar(ctx context.Context, usuario *entities.Usuario, us
 		EstadoHTTP: estado,
 		IP:         ip,
 		UserAgent:  userAgent,
+		TraceID:    observability.TraceID(ctx),
 	}
-	_ = s.auditoria.Registrar(ctx, entrada)
+	// La bitácora de seguridad no debe perderse si el cliente cancela.
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	_ = s.auditoria.Registrar(auditCtx, entrada)
 }
 
 func rutaAuditoriaAuth(accion string) string {

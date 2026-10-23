@@ -40,11 +40,15 @@ MediList/
 ├── cmd/api/main.go                     # arranque y wiring
 ├── internal/
 │   ├── config/config.go                # .env y variables de entorno
+│   ├── observability/
+│   │   ├── trace.go                    # trace_id compartido entre capas
+│   │   └── logfile.go                  # archivo JSON rotativo para Promtail
 │   ├── service/
 │   │   ├── entities/                   # entidades del dominio
 │   │   ├── ports.go                    # interfaces de repositorio
 │   │   ├── auth_service.go             # login, refresh, bloqueo, cambio de clave
 │   │   ├── error_service.go            # errores agregados (stdout + PostgreSQL)
+│   │   ├── retention_service.go        # retención de errores y auditoría
 │   │   ├── password.go                 # bcrypt y política de contraseñas
 │   │   ├── tokens.go                   # emisión y validación JWT
 │   │   ├── usuario_service.go          # usuarios, roles y auditoría
@@ -56,12 +60,13 @@ MediList/
 │   │   ├── refresh_token_store.go      # refresh tokens hasheados
 │   │   ├── auditoria_store.go          # bitácora
 │   │   ├── error_store.go              # errores agregados
+│   │   ├── retention_store.go          # purga de datos históricos
 │   │   └── *_store.go                  # almacenes clínicos
 │   └── transport/http/
 │       ├── router.go                   # rutas y health check
 │       ├── auth_middleware.go          # Bearer token, sesión y permisos
-│       ├── audit.go                    # auditoría automática de escrituras
-│       ├── request_context.go          # X-Request-ID y trace_id
+│       ├── audit.go                    # auditoría de escrituras y consultas sensibles
+│       ├── request_context.go          # X-Request-ID, traceparent y trace_id
 │       ├── report_error.go             # envío de errores a la agregación
 │       ├── rate_limit.go               # límite de intentos por IP
 │       ├── middleware.go               # logging, recovery y cabeceras
@@ -74,9 +79,16 @@ MediList/
 │   ├── 003_auth.sql                    # usuarios, roles, permisos, tokens y auditoría
 │   ├── 004_auth_seed.sql               # roles, permisos y admin inicial
 │   ├── 005_token_version.sql           # versión de sesión para revocación inmediata
-│   └── 006_errores.sql                 # errores agregados y permiso errores:leer
+│   ├── 006_errores.sql                 # errores agregados y permiso errores:leer
+│   └── 007_observabilidad.sql          # instancia, trace_id de auditoría e índices
+├── deploy/observability/               # Loki + Promtail + Grafana + alertas
+│   ├── docker-compose.yml
+│   ├── loki/loki-config.yml
+│   ├── promtail/promtail-config.yml
+│   └── grafana/provisioning/           # datasource, dashboard y reglas
 ├── scripts/
 │   ├── migrate.ps1                     # crea BD y aplica migraciones
+│   ├── observability.ps1               # levanta/consulta el stack local
 │   └── run.ps1                         # inicia la API
 ├── .env                                # configuración local (no versionar)
 ├── .env.example
@@ -91,6 +103,7 @@ MediList/
 - Go **1.26** o superior.
 - PostgreSQL **15** o superior en `localhost:5432`.
 - Usuario local de PostgreSQL con permisos para crear y usar la base `medilist`.
+- Docker Desktop con motor Linux (opcional, solo para el stack local de observabilidad).
 
 ## Puesta en marcha
 
@@ -99,8 +112,14 @@ MediList/
    ```env
    APP_ENV=development
    APP_SERVICE_NAME=medilist-api
+   # Opcional; si se omite se usa el hostname.
+   # APP_INSTANCE_ID=medilist-api-1
    HTTP_PORT=8080
    LOG_FORMAT=json
+   # Archivo que lee Promtail; si se omite, solo se escribe en stdout.
+   LOG_FILE=logs/medilist.jsonl
+   LOG_FILE_MAX_MB=100
+   LOG_FILE_BACKUPS=5
    DATABASE_URL=postgres://postgres:TU_PASSWORD_LOCAL@localhost:5432/medilist?sslmode=disable
 
    JWT_SECRET=CAMBIAR_POR_UN_SECRETO_ALEATORIO_DE_AL_MENOS_32_CARACTERES
@@ -110,6 +129,11 @@ MediList/
    BCRYPT_COST=12
    MAX_LOGIN_ATTEMPTS=5
    LOCK_MINUTES=15
+
+   # Retención; 0 deshabilita la purga de esa tabla.
+   RETENTION_INTERVAL_HOURS=24
+   ERROR_RETENTION_DAYS=90
+   AUDIT_RETENTION_DAYS=365
    ```
 
    Reemplaza `postgres` y `TU_PASSWORD_LOCAL` por el usuario y la contraseña que tengas configurados en tu propia instalación local de PostgreSQL. No publiques contraseñas reales en el README ni en archivos versionados.
@@ -361,7 +385,7 @@ programada -> confirmada -> atendida
 
 | Método | Ruta | Permiso | Descripción |
 |---|---|---|---|
-| `GET` | `/auditoria` | `auditoria:leer` | Filtros `search`, `accion`, `usuario_id`, `limit`, `offset` |
+| `GET` | `/auditoria` | `auditoria:leer` | Filtros `search`, `accion`, `usuario_id`, `trace_id`, `limit`, `offset` |
 
 Se registran:
 
@@ -370,6 +394,8 @@ Se registran:
 - Cambios de contraseña.
 - Operaciones de escritura autenticadas (`POST`, `PUT`, `PATCH`, `DELETE`).
 - Intentos de acceso denegados por falta de permisos.
+- Consultas a `/auditoria` y `/errores`, porque exponen información sensible.
+- `trace_id` en cada evento para cruzarlo con los logs y la tabla `errores_aplicacion`.
 
 No se almacenan contraseñas, tokens ni cuerpos de solicitud en la bitácora.
 
@@ -377,12 +403,15 @@ No se almacenan contraseñas, tokens ni cuerpos de solicitud en la bitácora.
 
 La API está preparada para un agregador de logs (Loki, ELK/OpenSearch, CloudWatch, Datadog, etc.):
 
-- **Logs estructurados JSON:** con `LOG_FORMAT=json` cada línea incluye `time`, `level`, `msg`, `service`, `env` y, en las solicitudes, `trace_id`, `method`, `path`, `status`, `duration_ms` y `usuario`.
-- **Correlación:** cada request recibe un `X-Request-ID`. Si el cliente envía uno válido se respeta; si no, se genera. El valor vuelve en la cabecera `X-Request-ID` y en `request_id` dentro de las respuestas de error.
-- **Errores agregados:** los errores internos (`5xx`) y los pánicos recuperados se guardan en `errores_aplicacion` con `trace_id`, `servicio`, `componente`, ruta, método, estado, código, mensaje, usuario, IP, user agent y stack trace. La escritura es *best-effort* (timeout de 2 s) y nunca reemplaza la respuesta original.
+- **Logs estructurados JSON:** con `LOG_FORMAT=json` cada línea incluye `time`, `level`, `msg`, `service`, `env` e `instance` (`APP_INSTANCE_ID` o hostname). Las solicitudes agregan `trace_id`, `method`, `path`, `status`, `duration_ms`, `usuario` y `usuario_id`. En `APP_ENV=production` la API exige `LOG_FORMAT=json` para no romper la agregación.
+- **Correlación:** cada request recibe un `trace_id`. Se acepta el estándar W3C `traceparent` (tiene prioridad) o un `X-Request-ID` válido; si no, se genera uno. El valor vuelve en `X-Request-ID` y en `request_id` dentro de las respuestas de error.
+- **Errores agregados:** los errores internos (`5xx`) y los pánicos recuperados se emiten a stdout y se guardan en `errores_aplicacion` con `trace_id`, `servicio`, `instancia`, `nivel`, `componente`, ruta, método, estado, código, mensaje, `usuario_id`, usuario, IP, user agent y `stack_trace`. La escritura en base es *best-effort* (timeout de 2 s): si falla, el error sigue disponible en stdout y queda un log de la falla de persistencia.
 - **Doble destino:** el mismo error se emite a stdout (para que lo recolecte el agente de logs) y a PostgreSQL (para consulta y auditoría desde la API). Ambos se correlacionan por `trace_id`.
-- **Microservicios:** configura un `APP_SERVICE_NAME` distinto por servicio, propaga `X-Request-ID` en las llamadas salientes y envía el stdout JSON al mismo agregador. El agregador puede reconstruir una transacción completa agrupando por `trace_id`; el campo `componente` identifica la capa (`http`, `worker`, etc.).
-- **Consulta:** `GET /api/v1/errores` con permiso `errores:leer` (admin y auditor). Filtros: `nivel`, `servicio`, `trace_id`, `search`, `limit`, `offset`.
+- **Auditoría correlacionada:** `auditoria.trace_id` permite cruzar un login, un acceso denegado o una consulta sensible con sus logs y errores técnicos. Las lecturas de `/auditoria` y `/errores` también se auditan.
+- **Errores del servidor HTTP:** `http.Server.ErrorLog` usa el mismo logger estructurado, de modo que los errores internos de `net/http` no quedan en texto plano fuera del agregador.
+- **Microservicios:** configura un `APP_SERVICE_NAME` distinto por servicio, propaga `traceparent`/`X-Request-ID` en las llamadas salientes y envía el stdout JSON al mismo agregador. El agregador puede reconstruir una transacción completa agrupando por `trace_id`; los campos `service`, `instancia` y `componente` distinguen servicio, réplica y capa.
+- **Retención automática:** un job interno purga `errores_aplicacion` y `auditoria` según `ERROR_RETENTION_DAYS` y `AUDIT_RETENTION_DAYS`. Se ejecuta al arrancar y cada `RETENTION_INTERVAL_HOURS`; `0` deshabilita la purga de esa tabla.
+- **Consulta:** `GET /api/v1/errores` con permiso `errores:leer` (admin y auditor). Filtros: `nivel`, `servicio`, `instancia`, `trace_id`, `search`, `limit`, `offset`.
 
 Ejemplo de consulta:
 
@@ -392,7 +421,109 @@ $errores = Invoke-RestMethod -Method Get `
   -Headers $headers
 ```
 
-Para producción, envía el stdout JSON al agregador, define retención para `errores_aplicacion` y `auditoria`, y alerta sobre incrementos de `nivel=error` o sobre `estado_http=500`. No se registran contraseñas, tokens ni cuerpos de solicitud; aun así, restringe el acceso a `errores:leer` porque los mensajes pueden incluir detalles internos de SQL.
+Para producción, envía el stdout JSON al agregador, ajusta la retención automática a tu política y alerta sobre incrementos de `nivel=error`, `estado_http=500`, fallas de persistencia (`no se pudo persistir el error agregado`) y fallas de retención. No se registran contraseñas, tokens ni cuerpos de solicitud; aun así, restringe el acceso a `errores:leer` y `auditoria:leer` porque los mensajes pueden incluir detalles internos de SQL y datos de seguridad.
+
+### Stack local con Loki, Promtail y Grafana
+
+El repositorio incluye un stack reproducible para desarrollo y pruebas. No es un despliegue endurecido para producción.
+
+Requisitos: Docker Desktop con el motor Linux iniciado.
+
+1. Inicia la API con `LOG_FILE` configurado (el `.env` de ejemplo ya lo incluye):
+
+   ```powershell
+   .\scripts\run.ps1
+   ```
+
+2. Levanta el stack:
+
+   ```powershell
+   .\scripts\observability.ps1 up
+   ```
+
+3. Abre los servicios:
+
+   | Servicio | URL | Credenciales |
+   |---|---|---|
+   | Grafana | `http://localhost:3000` | `admin` / `medilist-admin` (por defecto) |
+   | Dashboard | `http://localhost:3000/d/medilist-observabilidad` | Las mismas de Grafana |
+   | Loki | `http://localhost:3100` | Sin autenticación en local |
+   | Promtail | `http://localhost:9080` | Sin autenticación en local |
+   | Receptor de alertas | `http://localhost:8081/alert` | Sin autenticación en local |
+
+   Cambia la contraseña creando `deploy/observability/.env` con:
+
+   ```env
+   GRAFANA_ADMIN_PASSWORD=una-clave-local-segura
+   ```
+
+4. Comandos útiles:
+
+   ```powershell
+   .\scripts\observability.ps1 status
+   .\scripts\observability.ps1 logs
+   .\scripts\observability.ps1 down
+   ```
+
+   `down` conserva los volúmenes de Grafana y Loki. Para borrarlos usa `docker compose -f .\deploy\observability\docker-compose.yml down -v`.
+
+Qué incluye:
+
+- **Promtail** lee `logs/*.jsonl`, extrae `level`, `service`, `env` e `instance` como etiquetas y envía a Loki. La API rota el archivo por tamaño (`LOG_FILE_MAX_MB`) y conserva `LOG_FILE_BACKUPS` copias; Promtail sigue el archivo activo y no reprocesa las copias rotadas.
+- **Loki** conserva 30 días (`720h`) y usa almacenamiento local en el volumen `loki-data`.
+- **Grafana** aprovisiona automáticamente el datasource Loki, el dashboard `MediList - Observabilidad` y las reglas de alerta:
+  - solicitudes con `status >= 500` en los últimos 5 minutos;
+  - logs con `level=ERROR` en los últimos 5 minutos;
+  - fallos `no se pudo persistir el error agregado` en los últimos 5 minutos;
+  - fallos de retención de errores o auditoría en la última hora.
+- **Webhook local:** las alertas se envían a `alert-sink`, que imprime el JSON recibido en `docker compose logs alert-sink`. Sustituye esa URL por Slack, Teams, PagerDuty o tu endpoint real en `deploy/observability/grafana/provisioning/alerting/contact-points.yml`.
+
+Verifica que los logs llegan a Loki:
+
+```powershell
+$query = [uri]::EscapeDataString('{job="medilist-api"}')
+Invoke-RestMethod "http://localhost:3100/loki/api/v1/query_range?query=$query&limit=5"
+```
+
+Para probar la regla de 5xx sin provocar una falla real, escribe una línea sintética en un archivo aparte. No escribas directamente en `medilist.jsonl`: la API lo mantiene abierto para escritura.
+
+```powershell
+$line = @{
+  time = (Get-Date).ToUniversalTime().ToString("o")
+  level = "INFO"
+  msg = "solicitud HTTP"
+  service = "medilist-api"
+  env = "development"
+  instance = "local"
+  trace_id = "prueba-5xx"
+  method = "GET"
+  path = "/prueba-5xx"
+  status = 500
+} | ConvertTo-Json -Compress
+
+# UTF-8 sin BOM para que Promtail pueda parsear el JSON.
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Join-Path (Get-Location) "logs\prueba-5xx.jsonl"), $line + "`n", $utf8)
+
+# Opcional: hace que Promtail descubra el archivo de inmediato.
+docker compose -f .\deploy\observability\docker-compose.yml restart promtail
+```
+
+Después de la evaluación (aproximadamente uno o dos minutos), revisa:
+
+```powershell
+docker compose -f .\deploy\observability\docker-compose.yml logs --tail=20 alert-sink
+Remove-Item .\logs\prueba-5xx.jsonl
+```
+
+Notas para producción:
+
+- Cambia la contraseña de Grafana, no publiques los puertos `3000`, `3100`, `9080` ni `8081` fuera de la red interna y termina TLS en un reverse proxy.
+- Reemplaza `alert-sink` por un receptor real y protege el webhook con HTTPS, autenticación o firma.
+- Para varias réplicas, usa un archivo o etiqueta `instance` distinto por réplica y un recolector por nodo (Promtail DaemonSet, Fluent Bit, etc.). No compartas un único archivo entre réplicas.
+- Si usas Kubernetes, reemplaza el bind mount de `logs/` por un volumen efímero o `emptyDir` y ejecuta Promtail como DaemonSet.
+- El archivo `logs/medilist.jsonl` puede contener rutas, usuarios, IP y stack traces. Restringe sus permisos y no lo publiques. Si solo usas stdout, deja `LOG_FILE` vacío.
+- El stack local no sustituye la retención de PostgreSQL ni la auditoría; son mecanismos complementarios.
 
 ---
 
@@ -425,7 +556,7 @@ Errores:
 }
 ```
 
-El `request_id` también se devuelve en la cabecera `X-Request-ID` y permite correlacionar el error con los logs y con la tabla `errores_aplicacion`.
+El `request_id` también se devuelve en la cabecera `X-Request-ID` y permite correlacionar el error con los logs, la auditoría y la tabla `errores_aplicacion`. Si el cliente envía W3C `traceparent`, se usa su trace-id como prioridad.
 
 Códigos:
 
@@ -536,6 +667,7 @@ Invoke-RestMethod -Uri http://localhost:8080/api/v1/citas/1/estado `
 | RefreshToken | `refresh_tokens` | `RefreshTokenStore` |
 | Auditoría | `auditoria` | `AuditoriaStore` |
 | ErrorAplicacion | `errores_aplicacion` | `ErrorStore` |
+| Retención | `auditoria`, `errores_aplicacion` | `RetentionStore` |
 
 El resto del modelo (historia clínica, hospitalización, farmacia, facturación) puede agregarse replicando el patrón: entidad en `service/entities`, puerto en `service/ports.go`, caso de uso en `service`, almacén en `repository/postgres` y handler en `transport/http`.
 
@@ -567,7 +699,7 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - **Entradas:** límite de cuerpo JSON de 1 MiB, `DisallowUnknownFields`, consultas SQL parametrizadas y traducción de errores de longitud/formato a `400`.
 - **Secretos:** `.env` está en `.gitignore`; usa `.env.example` como plantilla.
 - **Sesiones:** al desactivar una cuenta, cambiar roles, cambiar contraseña o llamar a `revocar-sesiones` se incrementa `token_version`; el access token anterior falla de inmediato y los refresh tokens quedan revocados.
-- **Observabilidad:** logs JSON, `X-Request-ID`/`trace_id`, tabla `errores_aplicacion` y endpoint restringido `GET /errores`.
+- **Observabilidad:** logs JSON, W3C `traceparent`/`X-Request-ID`, `trace_id` en auditoría, tabla `errores_aplicacion` con `instancia`, retención automática y endpoints restringidos `GET /errores` y `GET /auditoria`.
 
 ### Límites y recomendaciones para producción
 
@@ -577,7 +709,7 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - No hay CORS configurado. Si la API se consume desde un frontend en otro origen, agrega un middleware con una lista blanca de orígenes.
 - No hay MFA, recuperación de contraseña por correo ni cifrado de campos a nivel de aplicación. Evalúa `pgcrypto` o cifrado de disco según el marco regulatorio aplicable.
 - La validación de solape se hace en la capa de servicio. Para alta concurrencia, agrega una restricción de exclusión en PostgreSQL o un advisory lock por médico.
-- Programa la limpieza periódica de `refresh_tokens` expirados y define retención para `auditoria` y `errores_aplicacion`. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.
+- La retención de `auditoria` y `errores_aplicacion` es automática; revisa sus valores antes de producción. Programa también la limpieza de `refresh_tokens` expirados. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.
 
 ## Próximos pasos sugeridos
 
@@ -587,4 +719,4 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 4. Facturación y seguros.
 5. Pruebas de integración con base de datos y pruebas de servicios con almacenes en memoria.
 6. Documentación OpenAPI/Swagger.
-7. Contenedores Docker y pipeline CI.
+7. Contenerizar la API y agregar pipeline CI.

@@ -148,6 +148,7 @@ type auditoriaResponse struct {
 	EstadoHTTP int       `json:"estado_http"`
 	IP         string    `json:"ip"`
 	UserAgent  string    `json:"user_agent"`
+	TraceID    string    `json:"trace_id,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
@@ -163,6 +164,7 @@ func nuevaAuditoriaResponse(a entities.Auditoria) auditoriaResponse {
 		EstadoHTTP: a.EstadoHTTP,
 		IP:         a.IP,
 		UserAgent:  a.UserAgent,
+		TraceID:    a.TraceID,
 		CreatedAt:  a.CreatedAt,
 	}
 }

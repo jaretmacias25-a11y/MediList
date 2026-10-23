@@ -1,0 +1,235 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: medilist-observabilidad
+    folder: MediList
+    interval: 1m
+    rules:
+      - uid: medilist_errores_5xx
+        title: MediList - solicitudes 5xx
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: loki
+            model:
+              editorMode: code
+              expr: sum(count_over_time({job="medilist-api"} | json status="status", msg="msg" | msg="solicitud HTTP" | status >= 500 [5m]))
+              queryType: range
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations:
+          summary: MediList registró respuestas 5xx en los últimos 5 minutos.
+          description: Revisa el dashboard de observabilidad y consulta GET /api/v1/errores.
+        labels:
+          severity: critical
+          service: medilist-api
+
+      - uid: medilist_persistencia_errores
+        title: MediList - fallo al persistir errores
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: loki
+            model:
+              editorMode: code
+              expr: sum(count_over_time({job="medilist-api"} | json msg="msg" | msg="no se pudo persistir el error agregado" [5m]))
+              queryType: range
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations:
+          summary: La API no pudo persistir errores en PostgreSQL.
+          description: Los errores siguen en Loki/stdout, pero se perdió la consulta desde /api/v1/errores. Revisa PostgreSQL y su conectividad.
+        labels:
+          severity: critical
+          service: medilist-api
+
+      - uid: medilist_errores_nivel_error
+        title: MediList - logs level=ERROR
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: loki
+            model:
+              editorMode: code
+              expr: sum(count_over_time({job="medilist-api", level="ERROR"} [5m]))
+              queryType: range
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations:
+          summary: MediList registró logs con level=ERROR en los últimos 5 minutos.
+          description: Revisa el dashboard, el trace_id y GET /api/v1/errores para identificar la causa.
+        labels:
+          severity: critical
+          service: medilist-api
+
+      - uid: medilist_retencion
+        title: MediList - fallo de retención
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: loki
+            model:
+              editorMode: code
+              expr: sum(count_over_time({job="medilist-api"} | json msg="msg" | msg=~"no se pudo aplicar la retención de (errores|auditoría)" [1h]))
+              queryType: range
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: La purga automática de errores o auditoría está fallando.
+          description: Revisa la conectividad con PostgreSQL y los permisos del job de retención.
+        labels:
+          severity: critical
+          service: medilist-api

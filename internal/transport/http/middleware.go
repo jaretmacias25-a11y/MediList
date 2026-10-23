@@ -66,9 +66,11 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 		}
 		traceID := ""
 		username := ""
+		var usuarioID int64
 		if meta := requestMetaFromContext(r.Context()); meta != nil {
 			traceID = meta.ID
 			username = meta.Username
+			usuarioID = meta.UsuarioID
 		}
 		logger.Info("solicitud HTTP",
 			"trace_id", traceID,
@@ -78,6 +80,7 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 			"duration_ms", time.Since(start).Milliseconds(),
 			"remote", r.RemoteAddr,
 			"usuario", username,
+			"usuario_id", usuarioID,
 		)
 	})
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"medilist/internal/config"
+	"medilist/internal/observability"
 	"medilist/internal/repository/postgres"
 	"medilist/internal/service"
 	httpapi "medilist/internal/transport/http"
@@ -17,19 +20,41 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "configuración de seguridad inválida: %v\n", err)
+		os.Exit(1)
+	}
+
+	logOutput := io.Writer(os.Stdout)
+	var logFile *observability.RotatingFileWriter
+	if cfg.LogFile != "" {
+		writer, err := observability.NewRotatingFileWriter(
+			cfg.LogFile,
+			int64(cfg.LogFileMaxMB)*1024*1024,
+			cfg.LogFileBackups,
+		)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "no se pudo abrir LOG_FILE: %v\n", err)
+			os.Exit(1)
+		}
+		logFile = writer
+		defer logFile.Close()
+		logOutput = io.MultiWriter(os.Stdout, logFile)
+	}
+
 	opts := &slog.HandlerOptions{Level: cfg.LogLevel()}
 	var handler slog.Handler
 	if cfg.LogFormat == "json" {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
+		handler = slog.NewJSONHandler(logOutput, opts)
 	} else {
-		handler = slog.NewTextHandler(os.Stdout, opts)
+		handler = slog.NewTextHandler(logOutput, opts)
 	}
-	logger := slog.New(handler).With("service", cfg.ServiceName, "env", cfg.Env)
+	logger := slog.New(handler).With(
+		"service", cfg.ServiceName,
+		"env", cfg.Env,
+		"instance", cfg.InstanceID,
+	)
 
-	if err := cfg.Validate(); err != nil {
-		logger.Error("configuración de seguridad inválida", "error", err)
-		os.Exit(1)
-	}
 	logger.Info("iniciando MediList API")
 
 	ctx := context.Background()
@@ -70,7 +95,19 @@ func main() {
 	}, usuarioStore, refreshTokenStore, auditoriaStore)
 	usuarioService := service.NewUsuarioService(usuarioStore, rolStore, cfg.BcryptCost)
 	auditoriaService := service.NewAuditoriaService(auditoriaStore)
-	errorService := service.NewErrorService(errorStore, cfg.ServiceName, logger)
+	errorService := service.NewErrorService(errorStore, cfg.ServiceName, cfg.InstanceID, logger)
+	retentionService := service.NewRetentionService(
+		postgres.NewRetentionStore(pool),
+		service.RetentionConfig{
+			Interval:       cfg.RetentionInterval,
+			ErrorRetention: cfg.ErrorRetention,
+			AuditRetention: cfg.AuditRetention,
+		},
+		logger,
+	)
+	retentionCtx, cancelRetention := context.WithCancel(ctx)
+	defer cancelRetention()
+	go retentionService.Run(retentionCtx)
 
 	// Transporte (HTTP)
 	router := httpapi.NewRouter(httpapi.Dependencies{
@@ -90,6 +127,7 @@ func main() {
 	server := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
 		Handler:           router,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

@@ -13,14 +13,15 @@ import (
 // El log estructurado va a stdout y la fila a PostgreSQL, de modo que un
 // agregador de logs (Loki, ELK, CloudWatch) pueda correlacionar por trace_id.
 type ErrorService struct {
-	store    ErrorStore
-	servicio string
-	logger   *slog.Logger
+	store     ErrorStore
+	servicio  string
+	instancia string
+	logger    *slog.Logger
 }
 
 // NewErrorService construye el servicio de errores agregados.
-func NewErrorService(store ErrorStore, servicio string, logger *slog.Logger) *ErrorService {
-	return &ErrorService{store: store, servicio: servicio, logger: logger}
+func NewErrorService(store ErrorStore, servicio, instancia string, logger *slog.Logger) *ErrorService {
+	return &ErrorService{store: store, servicio: servicio, instancia: instancia, logger: logger}
 }
 
 // Registrar guarda el error en stdout y en la base. Es best-effort: un fallo
@@ -33,6 +34,9 @@ func (s *ErrorService) Registrar(_ context.Context, e *entities.ErrorAplicacion)
 	if e.Servicio == "" {
 		e.Servicio = s.servicio
 	}
+	if e.Instancia == "" {
+		e.Instancia = s.instancia
+	}
 	if e.Nivel == "" {
 		e.Nivel = "error"
 	}
@@ -40,17 +44,26 @@ func (s *ErrorService) Registrar(_ context.Context, e *entities.ErrorAplicacion)
 		e.TraceID = "sin-trace"
 	}
 
+	var usuarioID int64
+	if e.UsuarioID != nil {
+		usuarioID = *e.UsuarioID
+	}
 	args := []any{
 		"trace_id", e.TraceID,
 		"servicio", e.Servicio,
+		"instancia", e.Instancia,
+		"nivel", e.Nivel,
 		"componente", e.Componente,
 		"metodo", e.Metodo,
 		"ruta", e.Ruta,
 		"estado_http", e.EstadoHTTP,
 		"codigo", e.Codigo,
 		"mensaje", e.Mensaje,
+		"usuario_id", usuarioID,
 		"usuario", e.Username,
 		"ip", e.IP,
+		"user_agent", e.UserAgent,
+		"stack_trace", e.StackTrace,
 	}
 	if e.Nivel == "warning" {
 		s.logger.Warn("error_aplicacion", args...)
@@ -71,6 +84,7 @@ func (s *ErrorService) Listar(ctx context.Context, filtro entities.ErrorFiltro) 
 	filtro.Search = strings.TrimSpace(filtro.Search)
 	filtro.Nivel = strings.ToLower(strings.TrimSpace(filtro.Nivel))
 	filtro.Servicio = strings.TrimSpace(filtro.Servicio)
+	filtro.Instancia = strings.TrimSpace(filtro.Instancia)
 	filtro.TraceID = strings.TrimSpace(filtro.TraceID)
 	return s.store.Listar(ctx, filtro)
 }

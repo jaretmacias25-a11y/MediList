@@ -22,12 +22,12 @@ func NewErrorStore(db *pgxpool.Pool) *ErrorStore {
 func (s *ErrorStore) Registrar(ctx context.Context, e *entities.ErrorAplicacion) error {
 	const q = `
 		INSERT INTO errores_aplicacion
-			(trace_id, servicio, componente, nivel, metodo, ruta, estado_http,
+			(trace_id, servicio, instancia, componente, nivel, metodo, ruta, estado_http,
 			 codigo, mensaje, usuario_id, username, ip, user_agent, stack_trace)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id, created_at`
 	err := s.db.QueryRow(ctx, q,
-		e.TraceID, e.Servicio, e.Componente, e.Nivel, e.Metodo, e.Ruta,
+		e.TraceID, e.Servicio, e.Instancia, e.Componente, e.Nivel, e.Metodo, e.Ruta,
 		e.EstadoHTTP, e.Codigo, e.Mensaje, e.UsuarioID, e.Username,
 		e.IP, e.UserAgent, e.StackTrace,
 	).Scan(&e.ID, &e.CreatedAt)
@@ -36,7 +36,7 @@ func (s *ErrorStore) Registrar(ctx context.Context, e *entities.ErrorAplicacion)
 
 func (s *ErrorStore) Listar(ctx context.Context, filtro entities.ErrorFiltro) ([]entities.ErrorAplicacion, error) {
 	const q = `
-		SELECT id, trace_id, servicio, componente, nivel, metodo, ruta, estado_http,
+		SELECT id, trace_id, servicio, instancia, componente, nivel, metodo, ruta, estado_http,
 			codigo, mensaje, usuario_id, username, ip, user_agent, stack_trace, created_at
 		FROM errores_aplicacion
 		WHERE (
@@ -49,11 +49,13 @@ func (s *ErrorStore) Listar(ctx context.Context, filtro entities.ErrorFiltro) ([
 		)
 		AND ($2 = '' OR nivel = $2)
 		AND ($3 = '' OR servicio = $3)
-		AND ($4 = '' OR trace_id = $4)
+		AND ($4 = '' OR instancia = $4)
+		AND ($5 = '' OR trace_id = $5)
 		ORDER BY created_at DESC
-		LIMIT $5 OFFSET $6`
+		LIMIT $6 OFFSET $7`
 	rows, err := s.db.Query(ctx, q,
-		filtro.Search, filtro.Nivel, filtro.Servicio, filtro.TraceID, filtro.Limit, filtro.Offset,
+		filtro.Search, filtro.Nivel, filtro.Servicio, filtro.Instancia,
+		filtro.TraceID, filtro.Limit, filtro.Offset,
 	)
 	if err != nil {
 		return nil, mapError(err)
@@ -65,8 +67,8 @@ func (s *ErrorStore) Listar(ctx context.Context, filtro entities.ErrorFiltro) ([
 		var e entities.ErrorAplicacion
 		var usuarioID pgtype.Int8
 		if err := rows.Scan(
-			&e.ID, &e.TraceID, &e.Servicio, &e.Componente, &e.Nivel, &e.Metodo,
-			&e.Ruta, &e.EstadoHTTP, &e.Codigo, &e.Mensaje, &usuarioID,
+			&e.ID, &e.TraceID, &e.Servicio, &e.Instancia, &e.Componente, &e.Nivel,
+			&e.Metodo, &e.Ruta, &e.EstadoHTTP, &e.Codigo, &e.Mensaje, &usuarioID,
 			&e.Username, &e.IP, &e.UserAgent, &e.StackTrace, &e.CreatedAt,
 		); err != nil {
 			return nil, mapError(err)

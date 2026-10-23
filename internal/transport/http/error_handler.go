@@ -26,6 +26,7 @@ func (h *ErrorHandler) Listar(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filtro.Nivel = strings.TrimSpace(q.Get("nivel"))
 	filtro.Servicio = strings.TrimSpace(q.Get("servicio"))
+	filtro.Instancia = strings.TrimSpace(q.Get("instancia"))
 	filtro.TraceID = strings.TrimSpace(q.Get("trace_id"))
 
 	lista, err := h.svc.Listar(r.Context(), filtro)
@@ -44,6 +45,7 @@ type errorLogResponse struct {
 	ID         int64     `json:"id"`
 	TraceID    string    `json:"trace_id"`
 	Servicio   string    `json:"servicio"`
+	Instancia  string    `json:"instancia"`
 	Componente string    `json:"componente"`
 	Nivel      string    `json:"nivel"`
 	Metodo     string    `json:"metodo"`
@@ -64,6 +66,7 @@ func nuevoErrorLogResponse(e entities.ErrorAplicacion) errorLogResponse {
 		ID:         e.ID,
 		TraceID:    e.TraceID,
 		Servicio:   e.Servicio,
+		Instancia:  e.Instancia,
 		Componente: e.Componente,
 		Nivel:      e.Nivel,
 		Metodo:     e.Metodo,

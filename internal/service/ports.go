@@ -82,3 +82,9 @@ type ErrorStore interface {
 	Registrar(ctx context.Context, e *entities.ErrorAplicacion) error
 	Listar(ctx context.Context, filtro entities.ErrorFiltro) ([]entities.ErrorAplicacion, error)
 }
+
+// RetentionStore elimina registros anteriores a una fecha de corte.
+type RetentionStore interface {
+	PurgarErrores(ctx context.Context, antes time.Time) (int64, error)
+	PurgarAuditoria(ctx context.Context, antes time.Time) (int64, error)
+}

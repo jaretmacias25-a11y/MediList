@@ -33,6 +33,7 @@ func (h *AuditoriaHandler) Listar(w http.ResponseWriter, r *http.Request) {
 		filtro.UsuarioID = id
 	}
 	filtro.Accion = strings.TrimSpace(q.Get("accion"))
+	filtro.TraceID = strings.TrimSpace(q.Get("trace_id"))
 
 	lista, err := h.svc.Listar(r.Context(), filtro)
 	if err != nil {

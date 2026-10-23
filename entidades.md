@@ -47,8 +47,8 @@ Esta versión implementa el núcleo de autenticación y autorización con las si
 | `usuario_roles` | Asignación N:M usuario–rol | `usuario_id` FK, `rol_id` FK, PK compuesta |
 | `rol_permisos` | Asignación N:M rol–permiso | `rol_id` FK, `permiso_id` FK, PK compuesta |
 | `refresh_tokens` | Sesiones de renovación | `id` PK, `usuario_id` FK, `token_hash` UK, `expira_en`, `revocado_en`, `ip`, `user_agent` |
-| `auditoria` | Bitácora de seguridad | `id` PK, `usuario_id` FK, `username`, `accion`, `recurso`, `metodo`, `ruta`, `estado_http`, `ip`, `user_agent`, `created_at` |
-| `errores_aplicacion` | Errores agregados para observabilidad | `id` PK, `trace_id`, `servicio`, `componente`, `nivel`, `metodo`, `ruta`, `estado_http`, `codigo`, `mensaje`, `usuario_id` FK, `username`, `ip`, `user_agent`, `stack_trace`, `created_at` |
+| `auditoria` | Bitácora de seguridad | `id` PK, `usuario_id` FK, `username`, `accion`, `recurso`, `metodo`, `ruta`, `estado_http`, `ip`, `user_agent`, `trace_id`, `created_at` |
+| `errores_aplicacion` | Errores agregados para observabilidad | `id` PK, `trace_id`, `servicio`, `instancia`, `componente`, `nivel`, `metodo`, `ruta`, `estado_http`, `codigo`, `mensaje`, `usuario_id` FK, `username`, `ip`, `user_agent`, `stack_trace`, `created_at` |
 
 Reglas de seguridad:
 
@@ -60,8 +60,9 @@ Reglas de seguridad:
 6. Los permisos se validan en el middleware antes de ejecutar el caso de uso.
 7. Los cambios de rol, contraseña o estado incrementan `token_version` y revocan los refresh tokens; el access token anterior deja de ser válido de inmediato.
 8. Un administrador puede forzar la revocación inmediata de todas las sesiones de un usuario.
-9. Se auditan inicios de sesión, bloqueos, refresh, cambios de contraseña, escrituras y accesos denegados.
-10. Los errores internos y pánicos se registran con `trace_id` en `errores_aplicacion` y en logs JSON; el mismo identificador se devuelve al cliente en `X-Request-ID` y `request_id`.
+9. Se auditan inicios de sesión, bloqueos, refresh, cambios de contraseña, escrituras, accesos denegados y consultas a los paneles de auditoría y errores.
+10. Los errores internos y pánicos se registran con `trace_id` y `instancia` en `errores_aplicacion` y en logs JSON; el mismo identificador se devuelve al cliente en `X-Request-ID` y `request_id`.
+11. La auditoría y los errores agregados comparten `trace_id`, lo que permite correlacionar un evento de seguridad con su fallo técnico. La retención se aplica automáticamente según la configuración.
 
 ---
 
@@ -211,6 +212,6 @@ erDiagram
 11. **Contraseñas:** nunca se almacenan ni registran en texto plano; solo el hash bcrypt.
 12. **Tokens:** el refresh token se almacena hasheado, rota en cada uso y se revoca al cerrar sesión o cambiar credenciales.
 13. **Mínimo privilegio:** cada rol recibe solo los permisos necesarios para su función.
-14. **Trazabilidad:** toda operación de escritura autenticada y todo intento de acceso denegado queda en `auditoria`.
+14. **Trazabilidad:** toda operación de escritura autenticada, todo intento de acceso denegado y toda consulta a los paneles de auditoría/errores queda en `auditoria` con su `trace_id`.
 15. **Revocación inmediata:** el claim `ver` del JWT debe coincidir con `usuarios.token_version`; cualquier cambio de rol, contraseña, estado o revocación explícita invalida los access tokens vigentes.
-16. **Observabilidad:** los errores internos se escriben simultáneamente en stdout JSON y en `errores_aplicacion`, correlacionados por `trace_id`; nunca incluyen contraseñas, tokens ni cuerpos de solicitud.
+16. **Observabilidad:** los errores internos se escriben simultáneamente en stdout JSON y en `errores_aplicacion`, correlacionados por `trace_id` e identificados por `instancia`; nunca incluyen contraseñas, tokens ni cuerpos de solicitud.

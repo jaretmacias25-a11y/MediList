@@ -1,0 +1,23 @@
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: MediList Webhook
+    receivers:
+      - uid: medilist_webhook
+        type: webhook
+        disableResolveMessage: false
+        settings:
+          url: http://alert-sink:8080/alert
+          httpMethod: POST
+          maxAlerts: "10"
+
+policies:
+  - orgId: 1
+    receiver: MediList Webhook
+    group_by:
+      - alertname
+      - severity
+    group_wait: 10s
+    group_interval: 1m
+    repeat_interval: 4h

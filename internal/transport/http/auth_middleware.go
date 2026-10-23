@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"medilist/internal/observability"
 	"medilist/internal/service"
 	"medilist/internal/service/entities"
 )
@@ -50,6 +51,7 @@ func (m *AuthMiddleware) Require(permission string, next http.Handler) http.Hand
 		}
 		if meta := requestMetaFromContext(r.Context()); meta != nil {
 			meta.Username = claims.Username
+			meta.UsuarioID = claims.UsuarioID
 		}
 
 		if permission != "" && !tienePermiso(claims, permission) {
@@ -100,6 +102,7 @@ func (m *AuthMiddleware) registrarDenegacion(r *http.Request, claims *service.Cl
 		EstadoHTTP: http.StatusForbidden,
 		IP:         clientIP(r),
 		UserAgent:  r.UserAgent(),
+		TraceID:    observability.TraceID(r.Context()),
 	}
 	if err := m.auditoria.Registrar(ctx, entrada); err != nil {
 		m.logger.Error("no se pudo auditar el acceso denegado", "error", err)

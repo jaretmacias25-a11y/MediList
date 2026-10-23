@@ -44,14 +44,24 @@ func reportarError(r *http.Request, logger *slog.Logger, status int, codigo, men
 		svc.Registrar(r.Context(), entrada)
 		return
 	}
+	var usuarioID int64
+	if entrada.UsuarioID != nil {
+		usuarioID = *entrada.UsuarioID
+	}
 	logger.Error("error_aplicacion",
 		"trace_id", entrada.TraceID,
+		"nivel", entrada.Nivel,
 		"componente", entrada.Componente,
 		"metodo", entrada.Metodo,
 		"ruta", entrada.Ruta,
 		"estado_http", entrada.EstadoHTTP,
 		"codigo", entrada.Codigo,
 		"mensaje", entrada.Mensaje,
+		"usuario_id", usuarioID,
+		"usuario", entrada.Username,
+		"ip", entrada.IP,
+		"user_agent", entrada.UserAgent,
+		"stack_trace", entrada.StackTrace,
 		"error", err,
 	)
 }

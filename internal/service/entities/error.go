@@ -7,6 +7,7 @@ type ErrorAplicacion struct {
 	ID         int64
 	TraceID    string
 	Servicio   string
+	Instancia  string
 	Componente string
 	Nivel      string
 	Metodo     string
@@ -25,7 +26,8 @@ type ErrorAplicacion struct {
 // ErrorFiltro agrupa los filtros de consulta de errores.
 type ErrorFiltro struct {
 	ListOptions
-	Nivel    string
-	Servicio string
-	TraceID  string
+	Nivel     string
+	Servicio  string
+	Instancia string
+	TraceID   string
 }
