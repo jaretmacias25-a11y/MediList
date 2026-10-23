@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"medilist/internal/service/entities"
@@ -50,12 +51,18 @@ func (s *PacienteService) Actualizar(ctx context.Context, id int64, p entities.P
 	if err != nil {
 		return nil, err
 	}
+	if p.Version > 0 && p.Version != actual.Version {
+		return nil, fmt.Errorf(
+			"%w: el paciente fue modificado por otra operación; vuelve a consultarlo e inténtalo de nuevo",
+			entities.ErrConflict)
+	}
 
 	normalizarPaciente(&p)
 	p.ID = id
 	p.Persona.ID = actual.Persona.ID
 	p.NumeroHistoria = actual.NumeroHistoria
 	p.Activo = actual.Activo
+	p.Version = actual.Version
 	if err := validarPaciente(p); err != nil {
 		return nil, err
 	}

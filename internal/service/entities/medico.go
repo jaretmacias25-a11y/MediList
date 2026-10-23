@@ -11,6 +11,7 @@ type Medico struct {
 	NumeroLicencia  string
 	TipoProfesional string
 	Activo          bool
+	Version         int64
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }

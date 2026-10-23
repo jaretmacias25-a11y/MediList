@@ -55,6 +55,14 @@ func (s *CitaService) validarSolape(ctx context.Context, c entities.Cita) error 
 	if solapa {
 		return fmt.Errorf("%w: el médico ya tiene una cita en ese horario", entities.ErrConflict)
 	}
+
+	solapa, err = s.store.ExisteSolapePaciente(ctx, c.PacienteID, c.FechaHoraInicio, c.DuracionMin, c.ID)
+	if err != nil {
+		return err
+	}
+	if solapa {
+		return fmt.Errorf("%w: el paciente ya tiene una cita en ese horario", entities.ErrConflict)
+	}
 	return nil
 }
 
@@ -108,6 +116,11 @@ func (s *CitaService) Actualizar(ctx context.Context, id int64, c entities.Cita)
 	if err != nil {
 		return nil, err
 	}
+	if c.Version > 0 && c.Version != actual.Version {
+		return nil, fmt.Errorf(
+			"%w: la cita fue modificada por otra operación; vuelve a consultarla e inténtalo de nuevo",
+			entities.ErrConflict)
+	}
 	if actual.Estado.EsTerminal() {
 		return nil, entities.NewValidationError(
 			"la cita está en estado %s y ya no puede modificarse", actual.Estado)
@@ -127,8 +140,15 @@ func (s *CitaService) Actualizar(ctx context.Context, id int64, c entities.Cita)
 		return nil, entities.NewValidationError(
 			"transición de estado no permitida: %s → %s", actual.Estado, c.Estado)
 	}
-	if err := s.validarParticipantes(ctx, c.PacienteID, c.MedicoID); err != nil {
-		return nil, err
+
+	participantesCambiaron := c.PacienteID != actual.PacienteID || c.MedicoID != actual.MedicoID
+	requiereActivos := c.Estado == entities.EstadoCitaProgramada ||
+		c.Estado == entities.EstadoCitaConfirmada ||
+		participantesCambiaron
+	if requiereActivos {
+		if err := s.validarParticipantes(ctx, c.PacienteID, c.MedicoID); err != nil {
+			return nil, err
+		}
 	}
 	if c.Estado == entities.EstadoCitaProgramada || c.Estado == entities.EstadoCitaConfirmada {
 		c.ID = id
@@ -139,6 +159,7 @@ func (s *CitaService) Actualizar(ctx context.Context, id int64, c entities.Cita)
 
 	c.ID = id
 	c.Codigo = actual.Codigo
+	c.Version = actual.Version
 	c.CreatedAt = actual.CreatedAt
 	if err := s.store.Actualizar(ctx, &c); err != nil {
 		return nil, err
@@ -189,5 +210,16 @@ func (s *CitaService) Eliminar(ctx context.Context, id int64) error {
 			"la cita está en estado %s y no puede cancelarse", actual.Estado)
 	}
 	actual.Estado = entities.EstadoCitaCancelada
-	return s.store.Actualizar(ctx, actual)
+	if err := s.store.Actualizar(ctx, actual); err != nil {
+		// Si otra solicitud canceló la cita entre la lectura y la escritura,
+		// la operación es idempotente y puede considerarse exitosa.
+		if errors.Is(err, entities.ErrConflict) {
+			reciente, errLectura := s.store.ObtenerPorID(ctx, id)
+			if errLectura == nil && reciente.Estado == entities.EstadoCitaCancelada {
+				return nil
+			}
+		}
+		return err
+	}
+	return nil
 }

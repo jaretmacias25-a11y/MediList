@@ -59,6 +59,7 @@ type usuarioResponse struct {
 	UltimoAcceso     *time.Time `json:"ultimo_acceso,omitempty"`
 	Roles            []string   `json:"roles"`
 	Permisos         []string   `json:"permisos"`
+	Version          int64      `json:"version"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
@@ -84,6 +85,7 @@ func nuevoUsuarioResponse(u entities.Usuario) usuarioResponse {
 		UltimoAcceso:     u.UltimoAcceso,
 		Roles:            roles,
 		Permisos:         permisos,
+		Version:          u.Version,
 		CreatedAt:        u.CreatedAt,
 		UpdatedAt:        u.UpdatedAt,
 	}
@@ -105,6 +107,7 @@ type actualizarUsuarioRequest struct {
 	Activo    *bool    `json:"activo"`
 	Roles     []string `json:"roles"`
 	Password  *string  `json:"password"`
+	Version   int64    `json:"version"`
 }
 
 // ---------------------------------------------------------------------------

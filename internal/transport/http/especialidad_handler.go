@@ -80,6 +80,7 @@ func (h *EspecialidadHandler) Actualizar(w http.ResponseWriter, r *http.Request)
 		Codigo:      req.Codigo,
 		Nombre:      req.Nombre,
 		Descripcion: req.Descripcion,
+		Version:     req.Version,
 	})
 	if err != nil {
 		writeServiceError(w, r, h.logger, err)

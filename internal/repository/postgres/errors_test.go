@@ -22,3 +22,17 @@ func TestMapErrorTraduceUniqueViolation(t *testing.T) {
 		t.Fatalf("se esperaba ErrConflict, se obtuvo: %v", err)
 	}
 }
+
+func TestMapErrorTraduceExclusionViolation(t *testing.T) {
+	err := mapError(&pgconn.PgError{Code: "23P01", Message: "exclusion constraint"})
+	if !errors.Is(err, entities.ErrConflict) {
+		t.Fatalf("se esperaba ErrConflict, se obtuvo: %v", err)
+	}
+}
+
+func TestMapErrorTraduceConflictoDeSerializacion(t *testing.T) {
+	err := mapError(&pgconn.PgError{Code: "40001", Message: "serialization failure"})
+	if !errors.Is(err, entities.ErrConflict) {
+		t.Fatalf("se esperaba ErrConflict, se obtuvo: %v", err)
+	}
+}

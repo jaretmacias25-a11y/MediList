@@ -90,6 +90,7 @@ func (h *UsuarioHandler) Actualizar(w http.ResponseWriter, r *http.Request) {
 		Activo:    req.Activo,
 		Roles:     req.Roles,
 		Password:  req.Password,
+		Version:   req.Version,
 	}, claims.UsuarioID)
 	if err != nil {
 		writeServiceError(w, r, h.logger, err)

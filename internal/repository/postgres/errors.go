@@ -27,6 +27,12 @@ func mapError(err error) error {
 			return fmt.Errorf("%w: el registro está referenciado por otros datos", entities.ErrConflict)
 		case "23514": // check_violation
 			return fmt.Errorf("%w: %s", entities.ErrValidation, pgErr.Message)
+		case "23P01": // exclusion_violation
+			return fmt.Errorf("%w: el horario ya fue ocupado por otra operación; actualiza la agenda e inténtalo de nuevo", entities.ErrConflict)
+		case "40001", "40P01": // serialization_failure / deadlock_detected
+			return fmt.Errorf("%w: otra operación modificó los mismos datos; vuelve a intentarlo", entities.ErrConflict)
+		case "55P03": // lock_not_available (lock_timeout)
+			return fmt.Errorf("%w: el registro está siendo modificado por otra operación; vuelve a intentarlo", entities.ErrConflict)
 		case "22001": // string_data_right_truncation
 			return fmt.Errorf("%w: uno o más campos exceden la longitud permitida", entities.ErrValidation)
 		case "23502": // not_null_violation
@@ -40,6 +46,13 @@ func mapError(err error) error {
 
 func noEncontrado(recurso string, id int64) error {
 	return fmt.Errorf("%w: %s %d", entities.ErrNotFound, recurso, id)
+}
+
+func conflictoConcurrencia(recurso string, id int64) error {
+	return fmt.Errorf(
+		"%w: %s %d fue modificado por otra operación; vuelve a consultarlo e inténtalo de nuevo",
+		entities.ErrConflict, recurso, id,
+	)
 }
 
 type rowScanner interface {

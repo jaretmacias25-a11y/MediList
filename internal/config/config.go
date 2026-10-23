@@ -14,15 +14,20 @@ const devJWTSecret = "dev-only-insecure-secret-change-me-please-0123456789"
 
 // Config contiene la configuración de la aplicación.
 type Config struct {
-	Env            string
-	HTTPPort       string
-	DatabaseURL    string
-	LogFormat      string
-	LogFile        string
-	LogFileMaxMB   int
-	LogFileBackups int
-	ServiceName    string
-	InstanceID     string
+	Env                string
+	HTTPPort           string
+	DatabaseURL        string
+	DBMaxConns         int
+	DBMinConns         int
+	DBStatementTimeout time.Duration
+	DBLockTimeout      time.Duration
+	DBIdleTxTimeout    time.Duration
+	LogFormat          string
+	LogFile            string
+	LogFileMaxMB       int
+	LogFileBackups     int
+	ServiceName        string
+	InstanceID         string
 
 	JWTSecret string
 	JWTIssuer string
@@ -44,22 +49,27 @@ func Load() Config {
 
 	env := getenv("APP_ENV", "development")
 	return Config{
-		Env:              env,
-		HTTPPort:         strings.TrimPrefix(getenv("HTTP_PORT", "8080"), ":"),
-		DatabaseURL:      getenv("DATABASE_URL", "postgres://postgres:CAMBIAR_PASSWORD@localhost:5432/medilist?sslmode=disable"),
-		LogFormat:        strings.ToLower(getenv("LOG_FORMAT", "text")),
-		LogFile:          strings.TrimSpace(getenv("LOG_FILE", "")),
-		LogFileMaxMB:     getenvInt("LOG_FILE_MAX_MB", 100),
-		LogFileBackups:   getenvInt("LOG_FILE_BACKUPS", 5),
-		ServiceName:      strings.TrimSpace(getenv("APP_SERVICE_NAME", "medilist-api")),
-		InstanceID:       strings.TrimSpace(getenv("APP_INSTANCE_ID", defaultInstanceID())),
-		JWTSecret:        getenv("JWT_SECRET", devJWTSecret),
-		JWTIssuer:        getenv("JWT_ISSUER", "medilist"),
-		AccessTokenTTL:   time.Duration(getenvInt("ACCESS_TOKEN_MINUTES", 15)) * time.Minute,
-		RefreshTokenTTL:  time.Duration(getenvInt("REFRESH_TOKEN_HOURS", 168)) * time.Hour,
-		BcryptCost:       getenvInt("BCRYPT_COST", 12),
-		MaxLoginAttempts: getenvInt("MAX_LOGIN_ATTEMPTS", 5),
-		LockoutDuration:  time.Duration(getenvInt("LOCK_MINUTES", 15)) * time.Minute,
+		Env:                env,
+		HTTPPort:           strings.TrimPrefix(getenv("HTTP_PORT", "8080"), ":"),
+		DatabaseURL:        getenv("DATABASE_URL", "postgres://postgres:CAMBIAR_PASSWORD@localhost:5432/medilist?sslmode=disable"),
+		DBMaxConns:         getenvInt("DB_MAX_CONNS", 20),
+		DBMinConns:         getenvInt("DB_MIN_CONNS", 2),
+		DBStatementTimeout: time.Duration(getenvInt("DB_STATEMENT_TIMEOUT_MS", 30000)) * time.Millisecond,
+		DBLockTimeout:      time.Duration(getenvInt("DB_LOCK_TIMEOUT_MS", 5000)) * time.Millisecond,
+		DBIdleTxTimeout:    time.Duration(getenvInt("DB_IDLE_TX_TIMEOUT_MS", 30000)) * time.Millisecond,
+		LogFormat:          strings.ToLower(getenv("LOG_FORMAT", "text")),
+		LogFile:            strings.TrimSpace(getenv("LOG_FILE", "")),
+		LogFileMaxMB:       getenvInt("LOG_FILE_MAX_MB", 100),
+		LogFileBackups:     getenvInt("LOG_FILE_BACKUPS", 5),
+		ServiceName:        strings.TrimSpace(getenv("APP_SERVICE_NAME", "medilist-api")),
+		InstanceID:         strings.TrimSpace(getenv("APP_INSTANCE_ID", defaultInstanceID())),
+		JWTSecret:          getenv("JWT_SECRET", devJWTSecret),
+		JWTIssuer:          getenv("JWT_ISSUER", "medilist"),
+		AccessTokenTTL:     time.Duration(getenvInt("ACCESS_TOKEN_MINUTES", 15)) * time.Minute,
+		RefreshTokenTTL:    time.Duration(getenvInt("REFRESH_TOKEN_HOURS", 168)) * time.Hour,
+		BcryptCost:         getenvInt("BCRYPT_COST", 12),
+		MaxLoginAttempts:   getenvInt("MAX_LOGIN_ATTEMPTS", 5),
+		LockoutDuration:    time.Duration(getenvInt("LOCK_MINUTES", 15)) * time.Minute,
 
 		RetentionInterval: time.Duration(getenvInt("RETENTION_INTERVAL_HOURS", 24)) * time.Hour,
 		ErrorRetention:    time.Duration(getenvInt("ERROR_RETENTION_DAYS", 90)) * 24 * time.Hour,
@@ -69,6 +79,21 @@ func Load() Config {
 
 // Validate comprueba que la configuración de seguridad sea segura.
 func (c Config) Validate() error {
+	if c.DBMaxConns < 2 || c.DBMaxConns > 200 {
+		return fmt.Errorf("DB_MAX_CONNS debe estar entre 2 y 200")
+	}
+	if c.DBMinConns < 0 || c.DBMinConns > c.DBMaxConns {
+		return fmt.Errorf("DB_MIN_CONNS debe estar entre 0 y DB_MAX_CONNS")
+	}
+	if c.DBStatementTimeout < 0 || c.DBStatementTimeout > 5*time.Minute {
+		return fmt.Errorf("DB_STATEMENT_TIMEOUT_MS debe estar entre 0 y 300000")
+	}
+	if c.DBLockTimeout < 0 || c.DBLockTimeout > time.Minute {
+		return fmt.Errorf("DB_LOCK_TIMEOUT_MS debe estar entre 0 y 60000")
+	}
+	if c.DBIdleTxTimeout < 0 || c.DBIdleTxTimeout > 5*time.Minute {
+		return fmt.Errorf("DB_IDLE_TX_TIMEOUT_MS debe estar entre 0 y 300000")
+	}
 	if c.LogFormat != "text" && c.LogFormat != "json" {
 		return fmt.Errorf("LOG_FORMAT debe ser text o json")
 	}

@@ -60,7 +60,14 @@ func main() {
 	ctx := context.Background()
 
 	// Repositorio (PostgreSQL)
-	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL, postgres.PoolOptions{
+		MaxConns:         cfg.DBMaxConns,
+		MinConns:         cfg.DBMinConns,
+		StatementTimeout: cfg.DBStatementTimeout,
+		LockTimeout:      cfg.DBLockTimeout,
+		IdleTxTimeout:    cfg.DBIdleTxTimeout,
+		ApplicationName:  cfg.ServiceName,
+	})
 	if err != nil {
 		logger.Error("no se pudo conectar a PostgreSQL", "error", err)
 		os.Exit(1)

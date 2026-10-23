@@ -80,7 +80,8 @@ MediList/
 │   ├── 004_auth_seed.sql               # roles, permisos y admin inicial
 │   ├── 005_token_version.sql           # versión de sesión para revocación inmediata
 │   ├── 006_errores.sql                 # errores agregados y permiso errores:leer
-│   └── 007_observabilidad.sql          # instancia, trace_id de auditoría e índices
+│   ├── 007_observabilidad.sql          # instancia, trace_id de auditoría e índices
+│   └── 008_consistencia_concurrencia.sql # exclusiones de agenda, versiones y trigger
 ├── deploy/observability/               # Loki + Promtail + Grafana + alertas
 │   ├── docker-compose.yml
 │   ├── loki/loki-config.yml
@@ -89,6 +90,7 @@ MediList/
 ├── scripts/
 │   ├── migrate.ps1                     # crea BD y aplica migraciones
 │   ├── observability.ps1               # levanta/consulta el stack local
+│   ├── solapes_citas.sql               # diagnostica solapes antes de migrar
 │   └── run.ps1                         # inicia la API
 ├── .env                                # configuración local (no versionar)
 ├── .env.example
@@ -121,6 +123,12 @@ MediList/
    LOG_FILE_MAX_MB=100
    LOG_FILE_BACKUPS=5
    DATABASE_URL=postgres://postgres:TU_PASSWORD_LOCAL@localhost:5432/medilist?sslmode=disable
+   # Pool y límites de espera para alta concurrencia.
+   DB_MAX_CONNS=20
+   DB_MIN_CONNS=2
+   DB_STATEMENT_TIMEOUT_MS=30000
+   DB_LOCK_TIMEOUT_MS=5000
+   DB_IDLE_TX_TIMEOUT_MS=30000
 
    JWT_SECRET=CAMBIAR_POR_UN_SECRETO_ALEATORIO_DE_AL_MENOS_32_CARACTERES
    JWT_ISSUER=medilist
@@ -140,6 +148,8 @@ MediList/
 
    `JWT_SECRET` debe tener al menos 32 caracteres. En producción usa un valor aleatorio y no reutilices el de desarrollo.
 
+   `DB_MAX_CONNS` debe dimensionarse según `max_connections` de PostgreSQL y el número de réplicas de la API. `DB_LOCK_TIMEOUT_MS` evita que una transacción quede bloqueada indefinidamente por otra operación concurrente; `DB_IDLE_TX_TIMEOUT_MS` cierra transacciones que quedaron abiertas por error.
+
 2. **Crear la base y aplicar migraciones**:
 
    ```powershell
@@ -147,6 +157,8 @@ MediList/
    ```
 
    El script detecta `psql.exe`, crea la base `medilist` si no existe y ejecuta los archivos de `migrations/` en orden.
+
+   La migración `008_consistencia_concurrencia.sql` crea la extensión `btree_gist` y las restricciones de exclusión de agenda. El usuario de migración necesita permiso para crear extensiones, o la extensión debe estar instalada previamente por un administrador. Si existen citas solapadas de antes de esta versión, la migración se detiene de forma segura para no alterar datos clínicos: ejecuta `scripts/solapes_citas.sql`, corrige los horarios/estados indicados y vuelve a ejecutar la migración.
 
 3. **Iniciar la API**:
 
@@ -193,6 +205,8 @@ Base URL: `http://localhost:8080/api/v1`
 5. El refresh token rota en cada uso: el anterior queda revocado.
 6. `POST /auth/logout` revoca el refresh token activo.
 7. Cada request protegido verifica en PostgreSQL que la cuenta siga activa y que `token_version` coincida con el claim `ver`. Si cambian roles, contraseña, estado o se revocan sesiones, los access tokens anteriores dejan de funcionar de inmediato.
+
+> **Clientes con refresh concurrente:** el refresh rota de forma atómica. Si dos solicitudes usan el mismo refresh token a la vez, solo una puede rotarlo; la otra se considera reutilización y revoca todas las sesiones del usuario, incluidos los access tokens vigentes. Los clientes deben serializar el refresh (por ejemplo, con un mutex o una única tarea de renovación) y reintentar el request original después de renovar.
 
 ### Endpoints de autenticación
 
@@ -364,7 +378,7 @@ Notas:
 | Método | Ruta | Permiso | Descripción |
 |---|---|---|---|
 | `GET` | `/citas` | `citas:leer` | Filtros: `paciente_id`, `medico_id`, `estado`, `desde`, `hasta`, `search` |
-| `POST` | `/citas` | `citas:escribir` | Agenda una cita y valida solape de agenda |
+| `POST` | `/citas` | `citas:escribir` | Agenda una cita y valida solape de médico y paciente |
 | `GET` | `/citas/{id}` | `citas:leer` | Obtiene una cita |
 | `PUT` | `/citas/{id}` | `citas:escribir` | Reagenda o actualiza la cita |
 | `PATCH` | `/citas/{id}/estado` | `citas:escribir` | Aplica una transición de estado |
@@ -380,6 +394,19 @@ programada -> confirmada -> atendida
      \-> cancelada
      \-> reprogramada
 ```
+
+### Concurrencia y consistencia
+
+Las operaciones que pueden competir entre sí están protegidas también en PostgreSQL, no solo con validaciones previas en el servicio:
+
+- **Solapamiento de agenda:** las restricciones `citas_medico_sin_solape` y `citas_paciente_sin_solape` usan `EXCLUDE USING gist` sobre intervalos `[inicio, fin)`. Solo cuentan las citas `programada` y `confirmada`; una cita cancelada, atendida, no asistida o reprogramada libera el horario. Dos solicitudes simultáneas para el mismo médico o el mismo paciente producen una cita y un `409 Conflict`, nunca dos.
+- **Actualizaciones perdidas:** especialidades, pacientes, médicos, citas y usuarios tienen una columna `version`. Las respuestas incluyen `version` y los `PUT` pueden enviarla; si el registro cambió desde que el cliente lo leyó, la escritura devuelve `409` en lugar de sobrescribir cambios ajenos. Aunque el cliente no envíe `version`, el servicio usa la versión leída al inicio de la operación y la base vuelve a comprobarla al escribir.
+- **Transiciones de estado:** dos cambios simultáneos sobre la misma cita solo aplican uno; el otro devuelve `409`. La cancelación es idempotente si la cita ya quedó cancelada.
+- **Participantes activos:** al crear una cita se bloquean las filas del paciente y del médico dentro de la transacción para que una baja concurrente no se cuele entre la validación y el `INSERT`. Un trigger de PostgreSQL refuerza la validación de participantes y fechas.
+- **Autenticación:** el contador de intentos fallidos se incrementa con bloqueo de fila; la rotación del refresh token consume el anterior y crea el nuevo en una sola transacción; el refresh guarda la `token_version` con la que fue emitido para detectar una revocación concurrente.
+- **Pool y esperas:** `DB_MAX_CONNS`, `DB_MIN_CONNS`, `DB_STATEMENT_TIMEOUT_MS`, `DB_LOCK_TIMEOUT_MS` y `DB_IDLE_TX_TIMEOUT_MS` acotan el consumo de conexiones y el tiempo de espera por bloqueos. Un timeout de bloqueo se traduce en `409` para que el cliente reintente, no en un `500`.
+
+Los conflictos `23P01` (exclusión), `40001` (serialización), `40P01` (deadlock) y `55P03` (lock timeout) se traducen a errores de dominio reintentables.
 
 ### Auditoría
 
@@ -675,7 +702,7 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 
 1. Paciente y médico se crean junto con su `persona` en una **transacción**.
 2. Documento de persona y número de licencia son **únicos** a nivel de base de datos.
-3. Citas con el mismo médico no pueden **solaparse** (comparación por intervalos).
+3. Citas con el mismo médico o el mismo paciente no pueden **solaparse**; la garantía se aplica con restricciones de exclusión de PostgreSQL sobre las citas activas, incluso bajo solicitudes simultáneas.
 4. La fecha de una cita nueva no puede estar en el pasado.
 5. Las transiciones de estado se validan en el dominio, no en el handler.
 6. Las citas se **cancelan**, no se eliminan; los pacientes y médicos tienen **baja lógica**.
@@ -685,13 +712,15 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 10. El refresh token se guarda como hash SHA-256; nunca en texto plano.
 11. La reutilización de un refresh token revocado revoca todas las sesiones del usuario.
 12. Cada access token incluye la versión de sesión (`ver`); si no coincide con `usuarios.token_version`, se rechaza aunque la firma sea válida.
+13. Las actualizaciones concurrentes de especialidades, pacientes, médicos, citas y usuarios se detectan con `version`; la segunda escritura devuelve `409` y no sobrescribe la primera.
+14. El contador de intentos fallidos, la rotación de refresh tokens y la revocación de sesiones se ejecutan con transacciones y bloqueos de fila para que dos solicitudes simultáneas no se pisen.
 
 ## Seguridad implementada
 
 - **Contraseñas:** bcrypt con costo 12; mínimo 12 caracteres con mayúscula, minúscula, número y símbolo; máximo 72 bytes.
 - **JWT:** HS256, secreto de al menos 32 caracteres, emisor validado, expiración obligatoria y algoritmo restringido.
-- **Tokens:** access token de 15 minutos; refresh token de 7 días, rotativo, almacenado como hash y con detección de reutilización.
-- **Fuerza bruta:** bloqueo de cuenta tras 5 intentos fallidos durante 15 minutos; límite de 30 solicitudes de login por minuto e IP.
+- **Tokens:** access token de 15 minutos; refresh token de 7 días, rotativo, almacenado como hash y con detección de reutilización. La rotación consume el token anterior y crea el nuevo en una sola transacción.
+- **Fuerza bruta:** bloqueo de cuenta tras 5 intentos fallidos durante 15 minutos; el contador se incrementa de forma atómica en PostgreSQL y el límite de 30 solicitudes de login por minuto e IP se aplica en memoria por instancia.
 - **Enumeración de usuarios:** misma respuesta para usuario inexistente o contraseña incorrecta; comparación bcrypt ficticia para igualar tiempos.
 - **RBAC:** permisos por recurso y acción, verificados en el middleware antes de llegar al handler.
 - **Auditoría:** logins, bloqueos, refresh, cambios de contraseña, escrituras y accesos denegados.
@@ -700,6 +729,7 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - **Secretos:** `.env` está en `.gitignore`; usa `.env.example` como plantilla.
 - **Sesiones:** al desactivar una cuenta, cambiar roles, cambiar contraseña o llamar a `revocar-sesiones` se incrementa `token_version`; el access token anterior falla de inmediato y los refresh tokens quedan revocados.
 - **Observabilidad:** logs JSON, W3C `traceparent`/`X-Request-ID`, `trace_id` en auditoría, tabla `errores_aplicacion` con `instancia`, retención automática y endpoints restringidos `GET /errores` y `GET /auditoria`.
+- **Concurrencia:** restricciones de exclusión para agenda, versiones optimistas para escrituras, transacciones para participantes y bloqueos de fila para autenticación; los conflictos de concurrencia se devuelven como `409` reintentables.
 
 ### Límites y recomendaciones para producción
 
@@ -708,7 +738,10 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - Para desarrollo se usa el usuario `postgres`. En producción crea un rol de base de datos con privilegios mínimos (solo DML sobre las tablas necesarias) y no uses superusuario.
 - No hay CORS configurado. Si la API se consume desde un frontend en otro origen, agrega un middleware con una lista blanca de orígenes.
 - No hay MFA, recuperación de contraseña por correo ni cifrado de campos a nivel de aplicación. Evalúa `pgcrypto` o cifrado de disco según el marco regulatorio aplicable.
-- La validación de solape se hace en la capa de servicio. Para alta concurrencia, agrega una restricción de exclusión en PostgreSQL o un advisory lock por médico.
+- El solapamiento de agenda ya está garantizado en PostgreSQL con restricciones de exclusión para médico y paciente. Requiere la extensión `btree_gist` y que las citas históricas no tengan solapes al aplicar la migración `008`; usa `scripts/solapes_citas.sql` para revisarlas.
+- El rate limiter de login/refresh está en memoria y es por instancia. Si ejecutas varias réplicas, usa un limitador compartido (Redis, API gateway o WAF) para que el límite sea global.
+- Los clientes deben serializar la renovación del refresh token. Un refresh concurrente con el mismo token se interpreta como reutilización y cierra todas las sesiones del usuario.
+- Las versiones optimistas hacen que dos escrituras simultáneas no se sobrescriban: el cliente que recibe `409` debe volver a consultar el recurso y reintentar con la versión actual.
 - La retención de `auditoria` y `errores_aplicacion` es automática; revisa sus valores antes de producción. Programa también la limpieza de `refresh_tokens` expirados. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.
 
 ## Próximos pasos sugeridos

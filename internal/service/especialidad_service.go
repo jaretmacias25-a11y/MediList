@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"medilist/internal/service/entities"
@@ -51,7 +52,17 @@ func (s *EspecialidadService) Actualizar(ctx context.Context, id int64, e entiti
 	if id <= 0 {
 		return nil, entities.NewValidationError("id de especialidad inválido")
 	}
+	actual, err := s.store.ObtenerPorID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if e.Version > 0 && e.Version != actual.Version {
+		return nil, fmt.Errorf(
+			"%w: la especialidad fue modificada por otra operación; vuelve a consultarla e inténtalo de nuevo",
+			entities.ErrConflict)
+	}
 	e.ID = id
+	e.Version = actual.Version
 	e.Codigo = strings.ToUpper(strings.TrimSpace(e.Codigo))
 	e.Nombre = strings.TrimSpace(e.Nombre)
 	e.Descripcion = strings.TrimSpace(e.Descripcion)

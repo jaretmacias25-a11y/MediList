@@ -82,6 +82,7 @@ type especialidadRequest struct {
 	Codigo      string `json:"codigo"`
 	Nombre      string `json:"nombre"`
 	Descripcion string `json:"descripcion"`
+	Version     int64  `json:"version"`
 }
 
 type especialidadResponse struct {
@@ -89,6 +90,7 @@ type especialidadResponse struct {
 	Codigo      string    `json:"codigo"`
 	Nombre      string    `json:"nombre"`
 	Descripcion string    `json:"descripcion"`
+	Version     int64     `json:"version"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -99,6 +101,7 @@ func nuevaEspecialidadResponse(e entities.Especialidad) especialidadResponse {
 		Codigo:      e.Codigo,
 		Nombre:      e.Nombre,
 		Descripcion: e.Descripcion,
+		Version:     e.Version,
 		CreatedAt:   e.CreatedAt,
 		UpdatedAt:   e.UpdatedAt,
 	}
@@ -114,6 +117,7 @@ type pacienteRequest struct {
 	FactorRH                   string         `json:"factor_rh"`
 	ContactoEmergenciaNombre   string         `json:"contacto_emergencia_nombre"`
 	ContactoEmergenciaTelefono string         `json:"contacto_emergencia_telefono"`
+	Version                    int64          `json:"version"`
 }
 
 func (r pacienteRequest) toEntity() (entities.Paciente, error) {
@@ -127,6 +131,7 @@ func (r pacienteRequest) toEntity() (entities.Paciente, error) {
 		FactorRH:                   r.FactorRH,
 		ContactoEmergenciaNombre:   r.ContactoEmergenciaNombre,
 		ContactoEmergenciaTelefono: r.ContactoEmergenciaTelefono,
+		Version:                    r.Version,
 	}, nil
 }
 
@@ -139,6 +144,7 @@ type pacienteResponse struct {
 	ContactoEmergenciaNombre   string          `json:"contacto_emergencia_nombre"`
 	ContactoEmergenciaTelefono string          `json:"contacto_emergencia_telefono"`
 	Activo                     bool            `json:"activo"`
+	Version                    int64           `json:"version"`
 	CreatedAt                  time.Time       `json:"created_at"`
 	UpdatedAt                  time.Time       `json:"updated_at"`
 }
@@ -153,6 +159,7 @@ func nuevoPacienteResponse(p entities.Paciente) pacienteResponse {
 		ContactoEmergenciaNombre:   p.ContactoEmergenciaNombre,
 		ContactoEmergenciaTelefono: p.ContactoEmergenciaTelefono,
 		Activo:                     p.Activo,
+		Version:                    p.Version,
 		CreatedAt:                  p.CreatedAt,
 		UpdatedAt:                  p.UpdatedAt,
 	}
@@ -167,6 +174,7 @@ type medicoRequest struct {
 	EspecialidadID  int64          `json:"especialidad_id"`
 	NumeroLicencia  string         `json:"numero_licencia"`
 	TipoProfesional string         `json:"tipo_profesional"`
+	Version         int64          `json:"version"`
 }
 
 func (r medicoRequest) toEntity() (entities.Medico, error) {
@@ -179,6 +187,7 @@ func (r medicoRequest) toEntity() (entities.Medico, error) {
 		EspecialidadID:  r.EspecialidadID,
 		NumeroLicencia:  r.NumeroLicencia,
 		TipoProfesional: r.TipoProfesional,
+		Version:         r.Version,
 	}, nil
 }
 
@@ -189,6 +198,7 @@ type medicoResponse struct {
 	NumeroLicencia  string               `json:"numero_licencia"`
 	TipoProfesional string               `json:"tipo_profesional"`
 	Activo          bool                 `json:"activo"`
+	Version         int64                `json:"version"`
 	CreatedAt       time.Time            `json:"created_at"`
 	UpdatedAt       time.Time            `json:"updated_at"`
 }
@@ -201,6 +211,7 @@ func nuevoMedicoResponse(m entities.Medico) medicoResponse {
 		NumeroLicencia:  m.NumeroLicencia,
 		TipoProfesional: m.TipoProfesional,
 		Activo:          m.Activo,
+		Version:         m.Version,
 		CreatedAt:       m.CreatedAt,
 		UpdatedAt:       m.UpdatedAt,
 	}
@@ -218,6 +229,7 @@ type citaRequest struct {
 	Tipo            string `json:"tipo"`
 	Motivo          string `json:"motivo"`
 	Estado          string `json:"estado"`
+	Version         int64  `json:"version"`
 }
 
 func (r citaRequest) toEntity() (entities.Cita, error) {
@@ -238,6 +250,7 @@ func (r citaRequest) toEntity() (entities.Cita, error) {
 		Tipo:            entities.TipoCita(strings.TrimSpace(r.Tipo)),
 		Motivo:          r.Motivo,
 		Estado:          entities.EstadoCita(strings.TrimSpace(r.Estado)),
+		Version:         r.Version,
 	}, nil
 }
 
@@ -254,6 +267,7 @@ type citaResponse struct {
 	Tipo               string    `json:"tipo"`
 	Motivo             string    `json:"motivo"`
 	Estado             string    `json:"estado"`
+	Version            int64     `json:"version"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
@@ -272,6 +286,7 @@ func nuevaCitaResponse(c entities.Cita) citaResponse {
 		Tipo:               string(c.Tipo),
 		Motivo:             c.Motivo,
 		Estado:             string(c.Estado),
+		Version:            c.Version,
 		CreatedAt:          c.CreatedAt,
 		UpdatedAt:          c.UpdatedAt,
 	}

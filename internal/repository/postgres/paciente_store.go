@@ -24,7 +24,7 @@ const pacienteSelect = `
 	SELECT
 		p.id, p.numero_historia, p.grupo_sanguineo, p.factor_rh,
 		p.contacto_emergencia_nombre, p.contacto_emergencia_telefono,
-		p.activo, p.created_at, p.updated_at,
+		p.activo, p.version, p.created_at, p.updated_at,
 		pe.id, pe.tipo_documento, pe.numero_documento, pe.nombres, pe.apellidos,
 		pe.fecha_nacimiento, pe.sexo, pe.telefono, pe.email, pe.direccion
 	FROM pacientes p
@@ -57,11 +57,11 @@ func (s *PacienteStore) Crear(ctx context.Context, p *entities.Paciente) error {
 			(persona_id, grupo_sanguineo, factor_rh,
 			 contacto_emergencia_nombre, contacto_emergencia_telefono, activo)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, numero_historia, created_at, updated_at`
+		RETURNING id, numero_historia, version, created_at, updated_at`
 	err = tx.QueryRow(ctx, insertPaciente,
 		p.Persona.ID, p.GrupoSanguineo, p.FactorRH,
 		p.ContactoEmergenciaNombre, p.ContactoEmergenciaTelefono, p.Activo,
-	).Scan(&p.ID, &p.NumeroHistoria, &p.CreatedAt, &p.UpdatedAt)
+	).Scan(&p.ID, &p.NumeroHistoria, &p.Version, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return mapError(err)
 	}
@@ -120,16 +120,17 @@ func (s *PacienteStore) Actualizar(ctx context.Context, p *entities.Paciente) er
 		SET grupo_sanguineo = $2,
 			factor_rh = $3,
 			contacto_emergencia_nombre = $4,
-			contacto_emergencia_telefono = $5
-		WHERE id = $1
+			contacto_emergencia_telefono = $5,
+			version = version + 1
+		WHERE id = $1 AND version = $6
 		RETURNING persona_id`
 	var personaID int64
 	err = tx.QueryRow(ctx, updatePaciente, p.ID,
 		p.GrupoSanguineo, p.FactorRH,
-		p.ContactoEmergenciaNombre, p.ContactoEmergenciaTelefono,
+		p.ContactoEmergenciaNombre, p.ContactoEmergenciaTelefono, p.Version,
 	).Scan(&personaID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return noEncontrado("paciente", p.ID)
+		return conflictoConcurrencia("paciente", p.ID)
 	}
 	if err != nil {
 		return mapError(err)
@@ -160,7 +161,10 @@ func (s *PacienteStore) Actualizar(ctx context.Context, p *entities.Paciente) er
 
 // Eliminar es una baja lógica para preservar la historia clínica.
 func (s *PacienteStore) Eliminar(ctx context.Context, id int64) error {
-	tag, err := s.db.Exec(ctx, `UPDATE pacientes SET activo = false WHERE id = $1`, id)
+	tag, err := s.db.Exec(ctx, `
+		UPDATE pacientes
+		SET activo = false, version = version + 1
+		WHERE id = $1`, id)
 	if err != nil {
 		return mapError(err)
 	}
@@ -175,7 +179,7 @@ func scanPaciente(row rowScanner) (*entities.Paciente, error) {
 	err := row.Scan(
 		&p.ID, &p.NumeroHistoria, &p.GrupoSanguineo, &p.FactorRH,
 		&p.ContactoEmergenciaNombre, &p.ContactoEmergenciaTelefono,
-		&p.Activo, &p.CreatedAt, &p.UpdatedAt,
+		&p.Activo, &p.Version, &p.CreatedAt, &p.UpdatedAt,
 		&p.Persona.ID, &p.Persona.TipoDocumento, &p.Persona.NumeroDocumento,
 		&p.Persona.Nombres, &p.Persona.Apellidos, &p.Persona.FechaNacimiento,
 		&p.Persona.Sexo, &p.Persona.Telefono, &p.Persona.Email, &p.Persona.Direccion,

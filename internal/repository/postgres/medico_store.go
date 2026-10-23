@@ -23,7 +23,7 @@ func NewMedicoStore(db *pgxpool.Pool) *MedicoStore {
 const medicoSelect = `
 	SELECT
 		m.id, m.especialidad_id, m.numero_licencia, m.tipo_profesional,
-		m.activo, m.created_at, m.updated_at,
+		m.activo, m.version, m.created_at, m.updated_at,
 		pe.id, pe.tipo_documento, pe.numero_documento, pe.nombres, pe.apellidos,
 		pe.fecha_nacimiento, pe.sexo, pe.telefono, pe.email, pe.direccion,
 		e.id, e.codigo, e.nombre, e.descripcion, e.created_at, e.updated_at
@@ -57,10 +57,10 @@ func (s *MedicoStore) Crear(ctx context.Context, m *entities.Medico) error {
 		INSERT INTO medicos
 			(persona_id, especialidad_id, numero_licencia, tipo_profesional, activo)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, created_at, updated_at`
+		RETURNING id, version, created_at, updated_at`
 	err = tx.QueryRow(ctx, insertMedico,
 		m.Persona.ID, m.EspecialidadID, m.NumeroLicencia, m.TipoProfesional, m.Activo,
-	).Scan(&m.ID, &m.CreatedAt, &m.UpdatedAt)
+	).Scan(&m.ID, &m.Version, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return mapError(err)
 	}
@@ -119,15 +119,16 @@ func (s *MedicoStore) Actualizar(ctx context.Context, m *entities.Medico) error 
 		UPDATE medicos
 		SET especialidad_id = $2,
 			numero_licencia = $3,
-			tipo_profesional = $4
-		WHERE id = $1
+			tipo_profesional = $4,
+			version = version + 1
+		WHERE id = $1 AND version = $5
 		RETURNING persona_id`
 	var personaID int64
 	err = tx.QueryRow(ctx, updateMedico, m.ID,
-		m.EspecialidadID, m.NumeroLicencia, m.TipoProfesional,
+		m.EspecialidadID, m.NumeroLicencia, m.TipoProfesional, m.Version,
 	).Scan(&personaID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return noEncontrado("médico", m.ID)
+		return conflictoConcurrencia("médico", m.ID)
 	}
 	if err != nil {
 		return mapError(err)
@@ -158,7 +159,10 @@ func (s *MedicoStore) Actualizar(ctx context.Context, m *entities.Medico) error 
 
 // Eliminar es una baja lógica para preservar las citas históricas.
 func (s *MedicoStore) Eliminar(ctx context.Context, id int64) error {
-	tag, err := s.db.Exec(ctx, `UPDATE medicos SET activo = false WHERE id = $1`, id)
+	tag, err := s.db.Exec(ctx, `
+		UPDATE medicos
+		SET activo = false, version = version + 1
+		WHERE id = $1`, id)
 	if err != nil {
 		return mapError(err)
 	}
@@ -172,7 +176,7 @@ func scanMedico(row rowScanner) (*entities.Medico, error) {
 	var m entities.Medico
 	err := row.Scan(
 		&m.ID, &m.EspecialidadID, &m.NumeroLicencia, &m.TipoProfesional,
-		&m.Activo, &m.CreatedAt, &m.UpdatedAt,
+		&m.Activo, &m.Version, &m.CreatedAt, &m.UpdatedAt,
 		&m.Persona.ID, &m.Persona.TipoDocumento, &m.Persona.NumeroDocumento,
 		&m.Persona.Nombres, &m.Persona.Apellidos, &m.Persona.FechaNacimiento,
 		&m.Persona.Sexo, &m.Persona.Telefono, &m.Persona.Email, &m.Persona.Direccion,

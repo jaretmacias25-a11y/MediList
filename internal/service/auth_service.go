@@ -113,25 +113,24 @@ func (s *AuthService) Login(ctx context.Context, username, password, ip, userAge
 	}
 
 	if !verificarPassword(usuario.PasswordHash, password) {
-		intentos := usuario.IntentosFallidos
-		if usuario.BloqueadoHasta != nil && usuario.BloqueadoHasta.Before(ahora) {
-			intentos = 0
-		}
-		intentos++
-
-		var bloqueadoHasta *time.Time
-		if intentos >= s.maxIntentos {
-			t := ahora.Add(s.bloqueo)
-			bloqueadoHasta = &t
-		}
-		if err := s.usuarios.RegistrarIntentoFallido(ctx, usuario.ID, intentos, bloqueadoHasta); err != nil {
+		// El incremento se hace de forma atómica en la base de datos. Si se
+		// hiciera con el valor leído antes del bcrypt, dos intentos
+		// simultáneos podrían sobrescribirse y retrasar el bloqueo.
+		_, bloqueadoHasta, err := s.usuarios.RegistrarIntentoFallido(
+			ctx, usuario.ID, s.maxIntentos, s.bloqueo,
+		)
+		if err != nil {
 			return nil, err
 		}
 		s.auditar(ctx, usuario, usuario.Username, "login_fallido", ip, userAgent, auditStatusUnauthorized)
 
 		if bloqueadoHasta != nil {
+			minutos := int(math.Ceil(time.Until(*bloqueadoHasta).Minutes()))
+			if minutos < 1 {
+				minutos = 1
+			}
 			return nil, fmt.Errorf("%w: demasiados intentos fallidos; intenta de nuevo en %d minuto(s)",
-				entities.ErrLocked, int(math.Ceil(s.bloqueo.Minutes())))
+				entities.ErrLocked, minutos)
 		}
 		return nil, credencialesInvalidas()
 	}
@@ -164,8 +163,9 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, userAgent s
 	}
 
 	if rt.RevocadoEn != nil {
-		// Reutilización de un token ya rotado: posible robo. Se revocan todas las sesiones.
-		_ = s.refresh.RevocarTodosPorUsuario(ctx, rt.UsuarioID)
+		// Reutilización de un token ya rotado: posible robo. Se revocan los
+		// refresh tokens y también los access tokens al incrementar la versión.
+		_ = s.usuarios.RevocarSesiones(ctx, rt.UsuarioID)
 		s.auditar(ctx, nil, "", "refresh_reutilizado", ip, userAgent, auditStatusUnauthorized)
 		return nil, fmt.Errorf("%w: refresh token inválido", entities.ErrUnauthorized)
 	}
@@ -186,10 +186,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, userAgent s
 		return nil, fmt.Errorf("%w: usuario inactivo", entities.ErrUnauthorized)
 	}
 
-	if err := s.refresh.Revocar(ctx, rt.ID); err != nil {
-		return nil, err
-	}
-	sesion, err := s.crearSesion(ctx, usuario, ip, userAgent)
+	sesion, err := s.rotarSesion(ctx, usuario, rt, ip, userAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -286,6 +283,7 @@ func (s *AuthService) CambiarPassword(ctx context.Context, userID int64, actual,
 		Apellidos: usuario.Apellidos,
 		Activo:    usuario.Activo,
 		Roles:     usuario.Roles,
+		Version:   usuario.Version,
 	}
 	if err := s.usuarios.Actualizar(ctx, u, hash, true); err != nil {
 		return err
@@ -304,14 +302,60 @@ func (s *AuthService) crearSesion(ctx context.Context, usuario *entities.Usuario
 		return nil, err
 	}
 	rt := &entities.RefreshToken{
-		UsuarioID: usuario.ID,
-		TokenHash: refreshHash,
-		ExpiraEn:  time.Now().Add(s.refreshTTL),
-		IP:        ip,
-		UserAgent: userAgent,
+		UsuarioID:    usuario.ID,
+		TokenHash:    refreshHash,
+		TokenVersion: usuario.TokenVersion,
+		ExpiraEn:     time.Now().Add(s.refreshTTL),
+		IP:           ip,
+		UserAgent:    userAgent,
 	}
 	if err := s.refresh.Crear(ctx, rt); err != nil {
 		return nil, err
+	}
+	return &Sesion{
+		AccessToken:  accessToken,
+		RefreshToken: refreshPlano,
+		ExpiraEn:     int64(s.accessTTL.Seconds()),
+		Usuario:      usuario,
+	}, nil
+}
+
+// rotarSesion consume el refresh token anterior y crea el siguiente dentro de
+// una sola transacción. Si dos solicitudes usan el mismo token a la vez, solo
+// una puede rotarlo; la otra se trata como reutilización y revoca la sesión.
+func (s *AuthService) rotarSesion(
+	ctx context.Context,
+	usuario *entities.Usuario,
+	anterior *entities.RefreshToken,
+	ip, userAgent string,
+) (*Sesion, error) {
+	accessToken, _, err := s.tokens.Generar(usuario)
+	if err != nil {
+		return nil, err
+	}
+	refreshPlano, refreshHash, err := generarRefreshToken()
+	if err != nil {
+		return nil, err
+	}
+	nuevo := &entities.RefreshToken{
+		UsuarioID:    usuario.ID,
+		TokenHash:    refreshHash,
+		TokenVersion: usuario.TokenVersion,
+		ExpiraEn:     time.Now().Add(s.refreshTTL),
+		IP:           ip,
+		UserAgent:    userAgent,
+	}
+	rotado, err := s.refresh.Rotar(ctx, anterior.ID, nuevo)
+	if err != nil {
+		return nil, err
+	}
+	if !rotado {
+		// El token ya fue consumido, expiró o fue revocado entre la lectura y
+		// la rotación. Se asume reutilización y se cierran todas las sesiones,
+		// incluidos los access tokens vigentes.
+		_ = s.usuarios.RevocarSesiones(ctx, usuario.ID)
+		s.auditar(ctx, nil, "", "refresh_reutilizado", ip, userAgent, auditStatusUnauthorized)
+		return nil, fmt.Errorf("%w: refresh token inválido", entities.ErrUnauthorized)
 	}
 	return &Sesion{
 		AccessToken:  accessToken,

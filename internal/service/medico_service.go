@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"medilist/internal/service/entities"
@@ -65,11 +66,17 @@ func (s *MedicoService) Actualizar(ctx context.Context, id int64, m entities.Med
 	if err != nil {
 		return nil, err
 	}
+	if m.Version > 0 && m.Version != actual.Version {
+		return nil, fmt.Errorf(
+			"%w: el médico fue modificado por otra operación; vuelve a consultarlo e inténtalo de nuevo",
+			entities.ErrConflict)
+	}
 
 	normalizarMedico(&m)
 	m.ID = id
 	m.Persona.ID = actual.Persona.ID
 	m.Activo = actual.Activo
+	m.Version = actual.Version
 	if err := validarMedico(m); err != nil {
 		return nil, err
 	}

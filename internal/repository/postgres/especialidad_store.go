@@ -24,15 +24,15 @@ func (s *EspecialidadStore) Crear(ctx context.Context, e *entities.Especialidad)
 	const q = `
 		INSERT INTO especialidades (codigo, nombre, descripcion)
 		VALUES ($1, $2, $3)
-		RETURNING id, created_at, updated_at`
+		RETURNING id, version, created_at, updated_at`
 	err := s.db.QueryRow(ctx, q, e.Codigo, e.Nombre, e.Descripcion).
-		Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt)
+		Scan(&e.ID, &e.Version, &e.CreatedAt, &e.UpdatedAt)
 	return mapError(err)
 }
 
 func (s *EspecialidadStore) ObtenerPorID(ctx context.Context, id int64) (*entities.Especialidad, error) {
 	const q = `
-		SELECT id, codigo, nombre, descripcion, created_at, updated_at
+		SELECT id, codigo, nombre, descripcion, version, created_at, updated_at
 		FROM especialidades
 		WHERE id = $1`
 	e, err := scanEspecialidad(s.db.QueryRow(ctx, q, id))
@@ -47,7 +47,7 @@ func (s *EspecialidadStore) ObtenerPorID(ctx context.Context, id int64) (*entiti
 
 func (s *EspecialidadStore) Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Especialidad, error) {
 	const q = `
-		SELECT id, codigo, nombre, descripcion, created_at, updated_at
+		SELECT id, codigo, nombre, descripcion, version, created_at, updated_at
 		FROM especialidades
 		WHERE ($1 = '' OR codigo ILIKE '%' || $1 || '%' OR nombre ILIKE '%' || $1 || '%')
 		ORDER BY nombre ASC
@@ -72,14 +72,17 @@ func (s *EspecialidadStore) Listar(ctx context.Context, opts entities.ListOption
 func (s *EspecialidadStore) Actualizar(ctx context.Context, e *entities.Especialidad) error {
 	const q = `
 		UPDATE especialidades
-		SET codigo = $2, nombre = $3, descripcion = $4
-		WHERE id = $1`
-	tag, err := s.db.Exec(ctx, q, e.ID, e.Codigo, e.Nombre, e.Descripcion)
+		SET codigo = $2,
+			nombre = $3,
+			descripcion = $4,
+			version = version + 1
+		WHERE id = $1 AND version = $5`
+	tag, err := s.db.Exec(ctx, q, e.ID, e.Codigo, e.Nombre, e.Descripcion, e.Version)
 	if err != nil {
 		return mapError(err)
 	}
 	if tag.RowsAffected() == 0 {
-		return noEncontrado("especialidad", e.ID)
+		return conflictoConcurrencia("especialidad", e.ID)
 	}
 	return nil
 }
@@ -97,7 +100,7 @@ func (s *EspecialidadStore) Eliminar(ctx context.Context, id int64) error {
 
 func scanEspecialidad(row rowScanner) (*entities.Especialidad, error) {
 	var e entities.Especialidad
-	err := row.Scan(&e.ID, &e.Codigo, &e.Nombre, &e.Descripcion, &e.CreatedAt, &e.UpdatedAt)
+	err := row.Scan(&e.ID, &e.Codigo, &e.Nombre, &e.Descripcion, &e.Version, &e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

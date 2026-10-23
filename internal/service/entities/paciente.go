@@ -31,6 +31,7 @@ type Paciente struct {
 	ContactoEmergenciaNombre   string
 	ContactoEmergenciaTelefono string
 	Activo                     bool
+	Version                    int64
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }

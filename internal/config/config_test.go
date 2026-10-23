@@ -7,19 +7,24 @@ import (
 
 func configValidaParaPruebas() Config {
 	return Config{
-		Env:              "production",
-		HTTPPort:         "8080",
-		DatabaseURL:      "postgres://localhost/medilist",
-		LogFormat:        "json",
-		ServiceName:      "medilist-api",
-		InstanceID:       "test-instance",
-		JWTSecret:        "secreto-de-prueba-con-mas-de-32-caracteres",
-		JWTIssuer:        "medilist",
-		AccessTokenTTL:   15 * time.Minute,
-		RefreshTokenTTL:  7 * 24 * time.Hour,
-		BcryptCost:       12,
-		MaxLoginAttempts: 5,
-		LockoutDuration:  15 * time.Minute,
+		Env:                "production",
+		HTTPPort:           "8080",
+		DatabaseURL:        "postgres://localhost/medilist",
+		DBMaxConns:         20,
+		DBMinConns:         2,
+		DBStatementTimeout: 30 * time.Second,
+		DBLockTimeout:      5 * time.Second,
+		DBIdleTxTimeout:    30 * time.Second,
+		LogFormat:          "json",
+		ServiceName:        "medilist-api",
+		InstanceID:         "test-instance",
+		JWTSecret:          "secreto-de-prueba-con-mas-de-32-caracteres",
+		JWTIssuer:          "medilist",
+		AccessTokenTTL:     15 * time.Minute,
+		RefreshTokenTTL:    7 * 24 * time.Hour,
+		BcryptCost:         12,
+		MaxLoginAttempts:   5,
+		LockoutDuration:    15 * time.Minute,
 
 		RetentionInterval: 24 * time.Hour,
 		ErrorRetention:    90 * 24 * time.Hour,
@@ -44,6 +49,26 @@ func TestValidateRechazaInstanciaYRetencionInvalidas(t *testing.T) {
 	cfg.AuditRetention = 10 * 24 * time.Hour
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("la retención de auditoría menor a 30 días debe rechazarse")
+	}
+}
+
+func TestValidateRechazaPoolYTimeoutsInvalidos(t *testing.T) {
+	cfg := configValidaParaPruebas()
+	cfg.DBMaxConns = 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("DB_MAX_CONNS menor a 2 debe rechazarse")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.DBMinConns = cfg.DBMaxConns + 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("DB_MIN_CONNS mayor que DB_MAX_CONNS debe rechazarse")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.DBLockTimeout = 2 * time.Minute
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("DB_LOCK_TIMEOUT_MS fuera de rango debe rechazarse")
 	}
 }
 

@@ -27,7 +27,7 @@ const usuarioSelect = `
 	SELECT
 		u.id, u.username, u.email, u.password_hash, u.nombres, u.apellidos,
 		u.activo, u.token_version, u.intentos_fallidos, u.bloqueado_hasta, u.ultimo_acceso,
-		u.created_at, u.updated_at,
+		u.version, u.created_at, u.updated_at,
 		COALESCE(array_agg(DISTINCT r.codigo) FILTER (WHERE r.codigo IS NOT NULL), '{}') AS roles,
 		COALESCE(array_agg(DISTINCT p.codigo) FILTER (WHERE p.codigo IS NOT NULL), '{}') AS permisos
 	FROM usuarios u
@@ -102,10 +102,10 @@ func (s *UsuarioStore) Crear(ctx context.Context, u *entities.Usuario) error {
 	const insertUsuario = `
 		INSERT INTO usuarios (username, email, password_hash, nombres, apellidos, activo)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, created_at, updated_at`
+		RETURNING id, version, created_at, updated_at`
 	err = tx.QueryRow(ctx, insertUsuario,
 		u.Username, u.Email, u.PasswordHash, u.Nombres, u.Apellidos, u.Activo,
-	).Scan(&u.ID, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Version, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return mapError(err)
 	}
@@ -129,15 +129,16 @@ func (s *UsuarioStore) Actualizar(ctx context.Context, u *entities.Usuario, pass
 			apellidos = $4,
 			activo = $5,
 			password_hash = COALESCE(NULLIF($6, ''), password_hash),
-			token_version = token_version + CASE WHEN $7 THEN 1 ELSE 0 END
-		WHERE id = $1
+			token_version = token_version + CASE WHEN $7 THEN 1 ELSE 0 END,
+			version = version + 1
+		WHERE id = $1 AND version = $8
 		RETURNING id`
 	var id int64
 	err = tx.QueryRow(ctx, updateUsuario,
-		u.ID, u.Email, u.Nombres, u.Apellidos, u.Activo, passwordHash, revocarSesiones,
+		u.ID, u.Email, u.Nombres, u.Apellidos, u.Activo, passwordHash, revocarSesiones, u.Version,
 	).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return noEncontrado("usuario", u.ID)
+		return conflictoConcurrencia("usuario", u.ID)
 	}
 	if err != nil {
 		return mapError(err)
@@ -182,12 +183,58 @@ func (s *UsuarioStore) RegistrarLoginExitoso(ctx context.Context, id int64) erro
 	return mapError(err)
 }
 
-func (s *UsuarioStore) RegistrarIntentoFallido(ctx context.Context, id int64, intentos int, bloqueadoHasta *time.Time) error {
-	_, err := s.db.Exec(ctx, `
+// RegistrarIntentoFallido incrementa el contador dentro de una transacción y
+// bloquea la fila del usuario. Así, dos intentos simultáneos no pueden leer el
+// mismo valor y sobrescribirse mutuamente.
+func (s *UsuarioStore) RegistrarIntentoFallido(
+	ctx context.Context,
+	id int64,
+	maxIntentos int,
+	bloqueo time.Duration,
+) (int, *time.Time, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, nil, mapError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var intentos int
+	var bloqueadoHasta pgtype.Timestamptz
+	var ahora time.Time
+	err = tx.QueryRow(ctx, `
+		SELECT intentos_fallidos, bloqueado_hasta, now()
+		FROM usuarios
+		WHERE id = $1
+		FOR UPDATE`, id).Scan(&intentos, &bloqueadoHasta, &ahora)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil, noEncontrado("usuario", id)
+	}
+	if err != nil {
+		return 0, nil, mapError(err)
+	}
+
+	// Si el bloqueo anterior ya expiró, la cuenta empieza una nueva ventana.
+	if bloqueadoHasta.Valid && !bloqueadoHasta.Time.After(ahora) {
+		intentos = 0
+	}
+	intentos++
+
+	var nuevoBloqueo *time.Time
+	if intentos >= maxIntentos {
+		t := ahora.Add(bloqueo)
+		nuevoBloqueo = &t
+	}
+
+	if _, err := tx.Exec(ctx, `
 		UPDATE usuarios
 		SET intentos_fallidos = $2, bloqueado_hasta = $3
-		WHERE id = $1`, id, intentos, bloqueadoHasta)
-	return mapError(err)
+		WHERE id = $1`, id, intentos, nuevoBloqueo); err != nil {
+		return 0, nil, mapError(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, nil, mapError(err)
+	}
+	return intentos, nuevoBloqueo, nil
 }
 
 func (s *UsuarioStore) RevocarSesiones(ctx context.Context, usuarioID int64) error {
@@ -199,7 +246,8 @@ func (s *UsuarioStore) RevocarSesiones(ctx context.Context, usuarioID int64) err
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE usuarios
-		SET token_version = token_version + 1
+		SET token_version = token_version + 1,
+			version = version + 1
 		WHERE id = $1`, usuarioID)
 	if err != nil {
 		return mapError(err)
@@ -249,7 +297,7 @@ func scanUsuario(row rowScanner) (*entities.Usuario, error) {
 	err := row.Scan(
 		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Nombres, &u.Apellidos,
 		&u.Activo, &u.TokenVersion, &u.IntentosFallidos, &bloqueadoHasta, &ultimoAcceso,
-		&u.CreatedAt, &u.UpdatedAt, &u.Roles, &u.Permisos,
+		&u.Version, &u.CreatedAt, &u.UpdatedAt, &u.Roles, &u.Permisos,
 	)
 	if err != nil {
 		return nil, err

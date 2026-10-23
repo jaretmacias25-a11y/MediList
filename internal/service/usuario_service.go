@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/mail"
 	"regexp"
 	"slices"
@@ -31,6 +32,7 @@ type ActualizarUsuarioInput struct {
 	Activo    *bool
 	Roles     []string
 	Password  *string
+	Version   int64
 }
 
 // UsuarioService gestiona usuarios, roles y bloqueos.
@@ -110,6 +112,11 @@ func (s *UsuarioService) Actualizar(ctx context.Context, id int64, in Actualizar
 	if err != nil {
 		return nil, err
 	}
+	if in.Version > 0 && in.Version != actual.Version {
+		return nil, fmt.Errorf(
+			"%w: el usuario fue modificado por otra operación; vuelve a consultarlo e inténtalo de nuevo",
+			entities.ErrConflict)
+	}
 
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if err := validarEmail(email); err != nil {
@@ -160,6 +167,7 @@ func (s *UsuarioService) Actualizar(ctx context.Context, id int64, in Actualizar
 		Apellidos: apellidos,
 		Activo:    activo,
 		Roles:     roles,
+		Version:   actual.Version,
 	}
 	if err := s.store.Actualizar(ctx, &usuario, passwordHash, revocarSesiones); err != nil {
 		return nil, err

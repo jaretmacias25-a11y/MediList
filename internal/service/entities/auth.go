@@ -28,20 +28,22 @@ type Usuario struct {
 	UltimoAcceso     *time.Time
 	Roles            []string
 	Permisos         []string
+	Version          int64
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
 
 // RefreshToken representa un token de refresco almacenado de forma hasheada.
 type RefreshToken struct {
-	ID         int64
-	UsuarioID  int64
-	TokenHash  string
-	ExpiraEn   time.Time
-	RevocadoEn *time.Time
-	IP         string
-	UserAgent  string
-	CreatedAt  time.Time
+	ID           int64
+	UsuarioID    int64
+	TokenHash    string
+	TokenVersion int
+	ExpiraEn     time.Time
+	RevocadoEn   *time.Time
+	IP           string
+	UserAgent    string
+	CreatedAt    time.Time
 }
 
 // Auditoria registra una acción relevante para la trazabilidad del sistema.

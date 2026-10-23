@@ -88,6 +88,7 @@ type Cita struct {
 	Tipo               TipoCita
 	Motivo             string
 	Estado             EstadoCita
+	Version            int64
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }

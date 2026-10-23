@@ -41,6 +41,7 @@ type CitaStore interface {
 	Listar(ctx context.Context, filtro entities.CitaFiltro) ([]entities.Cita, error)
 	Actualizar(ctx context.Context, c *entities.Cita) error
 	ExisteSolape(ctx context.Context, medicoID int64, inicio time.Time, duracionMin int, excluirID int64) (bool, error)
+	ExisteSolapePaciente(ctx context.Context, pacienteID int64, inicio time.Time, duracionMin int, excluirID int64) (bool, error)
 }
 
 // UsuarioStore es el puerto de persistencia de usuarios y sus roles.
@@ -51,7 +52,7 @@ type UsuarioStore interface {
 	Crear(ctx context.Context, u *entities.Usuario) error
 	Actualizar(ctx context.Context, u *entities.Usuario, passwordHash string, revocarSesiones bool) error
 	RegistrarLoginExitoso(ctx context.Context, id int64) error
-	RegistrarIntentoFallido(ctx context.Context, id int64, intentos int, bloqueadoHasta *time.Time) error
+	RegistrarIntentoFallido(ctx context.Context, id int64, maxIntentos int, bloqueo time.Duration) (int, *time.Time, error)
 	RevocarSesiones(ctx context.Context, usuarioID int64) error
 	Desbloquear(ctx context.Context, id int64) error
 	SesionValida(ctx context.Context, usuarioID int64, tokenVersion int) (bool, error)
@@ -67,6 +68,7 @@ type RolStore interface {
 type RefreshTokenStore interface {
 	Crear(ctx context.Context, rt *entities.RefreshToken) error
 	BuscarPorHash(ctx context.Context, hash string) (*entities.RefreshToken, error)
+	Rotar(ctx context.Context, id int64, nuevo *entities.RefreshToken) (bool, error)
 	Revocar(ctx context.Context, id int64) error
 	RevocarTodosPorUsuario(ctx context.Context, usuarioID int64) error
 }

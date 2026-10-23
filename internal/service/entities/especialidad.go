@@ -8,6 +8,7 @@ type Especialidad struct {
 	Codigo      string
 	Nombre      string
 	Descripcion string
+	Version     int64
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
