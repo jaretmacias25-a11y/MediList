@@ -143,7 +143,7 @@ MediList/
 2. **Crear la base y aplicar migraciones**:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1 -Password "TU_PASSWORD_LOCAL"
    ```
 
    El script detecta `psql.exe`, crea la base `medilist` si no existe y ejecuta los archivos de `migrations/` en orden.

@@ -17,6 +17,10 @@ if (-not $psql) {
     throw "No se encontró psql.exe. Instala PostgreSQL o agrega su carpeta bin al PATH."
 }
 
+if ([string]::IsNullOrWhiteSpace($Password)) {
+    throw "Define la contraseña con -Password o mediante la variable de entorno PGPASSWORD."
+}
+
 $env:PGPASSWORD = $Password
 
 $exists = & $psql -U $DbUser -h $DbHost -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$Database'"
