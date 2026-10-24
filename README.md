@@ -81,7 +81,8 @@ MediList/
 │   ├── 005_token_version.sql           # versión de sesión para revocación inmediata
 │   ├── 006_errores.sql                 # errores agregados y permiso errores:leer
 │   ├── 007_observabilidad.sql          # instancia, trace_id de auditoría e índices
-│   └── 008_consistencia_concurrencia.sql # exclusiones de agenda, versiones y trigger
+│   ├── 008_consistencia_concurrencia.sql # exclusiones de agenda, versiones y trigger
+│   └── 009_portal_paciente.sql         # cuentas, catálogo, tokens y permisos del portal
 ├── deploy/observability/               # Loki + Promtail + Grafana + alertas
 │   ├── docker-compose.yml
 │   ├── loki/loki-config.yml
@@ -744,15 +745,6 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - Las versiones optimistas hacen que dos escrituras simultáneas no se sobrescriban: el cliente que recibe `409` debe volver a consultar el recurso y reintentar con la versión actual.
 - La retención de `auditoria` y `errores_aplicacion` es automática; revisa sus valores antes de producción. Programa también la limpieza de `refresh_tokens` expirados. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.
 
-## Próximos pasos sugeridos
-
-1. Módulo de historia clínica (`EncuentroAtencion`, diagnósticos, recetas).
-2. Hospitalización y camas.
-3. Farmacia e inventario.
-4. Facturación y seguros.
-5. Pruebas de integración con base de datos y pruebas de servicios con almacenes en memoria.
-6. Documentación OpenAPI/Swagger.
-7. Contenerizar la API y agregar pipeline CI.
 
 ## Contribuyentes y asistencia
 
