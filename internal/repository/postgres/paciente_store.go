@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"medilist/internal/service/entities"
@@ -22,7 +23,7 @@ func NewPacienteStore(db *pgxpool.Pool) *PacienteStore {
 
 const pacienteSelect = `
 	SELECT
-		p.id, p.numero_historia, p.grupo_sanguineo, p.factor_rh,
+		p.id, p.usuario_id, p.numero_historia, p.grupo_sanguineo, p.factor_rh,
 		p.contacto_emergencia_nombre, p.contacto_emergencia_telefono,
 		p.activo, p.version, p.created_at, p.updated_at,
 		pe.id, pe.tipo_documento, pe.numero_documento, pe.nombres, pe.apellidos,
@@ -54,12 +55,12 @@ func (s *PacienteStore) Crear(ctx context.Context, p *entities.Paciente) error {
 
 	const insertPaciente = `
 		INSERT INTO pacientes
-			(persona_id, grupo_sanguineo, factor_rh,
+			(persona_id, usuario_id, grupo_sanguineo, factor_rh,
 			 contacto_emergencia_nombre, contacto_emergencia_telefono, activo)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, numero_historia, version, created_at, updated_at`
 	err = tx.QueryRow(ctx, insertPaciente,
-		p.Persona.ID, p.GrupoSanguineo, p.FactorRH,
+		p.Persona.ID, p.UsuarioID, p.GrupoSanguineo, p.FactorRH,
 		p.ContactoEmergenciaNombre, p.ContactoEmergenciaTelefono, p.Activo,
 	).Scan(&p.ID, &p.NumeroHistoria, &p.Version, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
@@ -72,6 +73,26 @@ func (s *PacienteStore) ObtenerPorID(ctx context.Context, id int64) (*entities.P
 	p, err := scanPaciente(s.db.QueryRow(ctx, pacienteSelect+` WHERE p.id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, noEncontrado("paciente", id)
+	}
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return p, nil
+}
+
+// BuscarPorDocumento localiza una historia clínica por el documento de su
+// persona. El tipo se compara sin distinguir mayúsculas porque los formularios
+// históricos usan valores como "cedula" y "CEDULA".
+func (s *PacienteStore) BuscarPorDocumento(
+	ctx context.Context,
+	tipoDocumento, numeroDocumento string,
+) (*entities.Paciente, error) {
+	q := pacienteSelect + `
+		WHERE UPPER(pe.tipo_documento) = UPPER($1)
+		  AND pe.numero_documento = $2`
+	p, err := scanPaciente(s.db.QueryRow(ctx, q, tipoDocumento, numeroDocumento))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, entities.ErrNotFound
 	}
 	if err != nil {
 		return nil, mapError(err)
@@ -159,6 +180,22 @@ func (s *PacienteStore) Actualizar(ctx context.Context, p *entities.Paciente) er
 	return mapError(tx.Commit(ctx))
 }
 
+// VincularUsuario asocia una cuenta con un paciente existente. La unicidad
+// del vínculo está garantizada por el índice pacientes_usuario_id_uk.
+func (s *PacienteStore) VincularUsuario(ctx context.Context, pacienteID, usuarioID int64) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE pacientes
+		SET usuario_id = $2, version = version + 1
+		WHERE id = $1`, pacienteID, usuarioID)
+	if err != nil {
+		return mapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return noEncontrado("paciente", pacienteID)
+	}
+	return nil
+}
+
 // Eliminar es una baja lógica para preservar la historia clínica.
 func (s *PacienteStore) Eliminar(ctx context.Context, id int64) error {
 	tag, err := s.db.Exec(ctx, `
@@ -176,8 +213,9 @@ func (s *PacienteStore) Eliminar(ctx context.Context, id int64) error {
 
 func scanPaciente(row rowScanner) (*entities.Paciente, error) {
 	var p entities.Paciente
+	var usuarioID pgtype.Int8
 	err := row.Scan(
-		&p.ID, &p.NumeroHistoria, &p.GrupoSanguineo, &p.FactorRH,
+		&p.ID, &usuarioID, &p.NumeroHistoria, &p.GrupoSanguineo, &p.FactorRH,
 		&p.ContactoEmergenciaNombre, &p.ContactoEmergenciaTelefono,
 		&p.Activo, &p.Version, &p.CreatedAt, &p.UpdatedAt,
 		&p.Persona.ID, &p.Persona.TipoDocumento, &p.Persona.NumeroDocumento,
@@ -186,6 +224,10 @@ func scanPaciente(row rowScanner) (*entities.Paciente, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+	if usuarioID.Valid {
+		id := usuarioID.Int64
+		p.UsuarioID = &id
 	}
 	return &p, nil
 }

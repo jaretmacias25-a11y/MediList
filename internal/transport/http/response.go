@@ -63,6 +63,8 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, entities.ErrUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
+	case errors.Is(err, entities.ErrEmailNoVerificado):
+		writeError(w, http.StatusForbidden, "email_no_verificado", err.Error())
 	case errors.Is(err, entities.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", err.Error())
 	case errors.Is(err, entities.ErrLocked):

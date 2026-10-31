@@ -13,6 +13,9 @@ coverage.out
 # Logs locales que consume Promtail
 /logs/
 
+# Buzón local del adaptador de correo de desarrollo
+/outbox/
+
 # Editor
 .idea/
 .vscode/

@@ -1,8 +1,8 @@
 # MediList — Plan para concluir el backend
 
-> Fecha: 23/10/2026  
+> Fecha: 26/10/2026  
 > Alcance: backend Go/PostgreSQL. No incluye frontend.  
-> Estado: propuesta de trabajo para revisión.  
+> Estado: Fase 2 completada; la Fase 3 (actor/ownership y portal) es la siguiente.  
 > Documentos relacionados: `README.md` (estado actual) y `entidades.md` (modelo completo objetivo).
 
 ---
@@ -17,13 +17,13 @@ La base actual ya tiene una parte importante del backend administrativo:
 - control de concurrencia con restricciones de exclusión y versiones optimistas;
 - auditoría, logs estructurados y retención.
 
-Sin embargo, **el flujo de paciente con cuenta propia, agenda de disponibilidad, portal del paciente, derivaciones y acciones propias del médico todavía no está implementado**. Lo que existe hoy es un CRUD administrativo; no existe una cuenta de paciente vinculada a su historia, ni una regla que impida a un paciente agendar directamente a un especialista.
+La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones. Todavía **no existe el portal del paciente ni el del médico**: falta construir la autorización por fila, la agenda propia, la disponibilidad calculada, las acciones del médico y el uso de derivaciones desde la API.
 
 El orden recomendado para concluir el backend es:
 
 1. Cerrar las decisiones de negocio y el contrato de API.
 2. Crear el modelo de datos y las migraciones.
-3. Implementar registro, verificación de cuenta y vinculación paciente/usuario.
+3. ~~Implementar registro, verificación de cuenta y vinculación paciente/usuario.~~ (completado)
 4. Implementar autorización por fila: el paciente solo ve lo suyo y el médico solo ve su agenda.
 5. Crear catálogo, horarios y disponibilidad.
 6. Permitir que el paciente agende las cuatro áreas de acceso directo.
@@ -47,27 +47,27 @@ Si lo que se necesita es representar un vínculo familiar o de tutor (por ejempl
 
 ---
 
-## 1. Supuestos y decisiones que deben confirmarse
+## 1. Supuestos y decisiones de producto
 
-Estas decisiones deben cerrarse antes de escribir migraciones, porque cambian el modelo y los endpoints.
+Este cuadro conserva las decisiones de negocio. Las marcadas como implementadas ya están reflejadas en el esquema o en la Fase 2; las pendientes siguen abiertas.
 
 | # | Tema | Propuesta inicial | Estado |
 |---|---|---|---|
 | 1 | Significado de “remitir a otro paciente” | Remitir a otro profesional/especialidad | Confirmar |
-| 2 | Especialidades de acceso directo | `MED-GEN`, `FISIO`, `ODONTO`, `NUTRI` | Confirmar |
-| 3 | Especialidades que exigen derivación | Todas las demás, incluida `OTORRINO` | Confirmar |
-| 4 | Quién emite la derivación que habilita al especialista | Solo médico de Medicina General, desde una cita `atendida` | Confirmar |
+| 2 | Especialidades de acceso directo | `MED-GEN`, `FISIO`, `ODONTO`, `NUTRI` | Implementado en catálogo |
+| 3 | Especialidades que exigen derivación | Todas las demás, incluida `OTORRINO` | Implementado en catálogo |
+| 4 | Quién emite la derivación que habilita al especialista | Solo médico de Medicina General, desde una cita `atendida` | Implementado en trigger 011 |
 | 5 | Vigencia de la derivación | 90 días por defecto, configurable | Confirmar |
-| 6 | Uso de la derivación | Una derivación habilita una cita activa; si se cancela antes de la atención y sigue vigente, vuelve a `pendiente` | Confirmar |
+| 6 | Uso de la derivación | Una derivación habilita una cita activa; si se cancela antes de la atención y sigue vigente, vuelve a `pendiente` | Parcial: índice 011 |
 | 7 | No asistencia del paciente a la cita de especialista | Consume la derivación; se requiere nueva valoración de Medicina General | Confirmar |
 | 8 | Excepción de emergencia | Recepción/admin puede sobrescribir con permiso, motivo y auditoría | Confirmar |
-| 9 | Registro de paciente | Requiere verificación de email antes de agendar | Confirmar |
-| 10 | Paciente ya existente | No duplicar historia; vincular cuenta mediante recepción o verificación | Confirmar |
-| 11 | Cuenta de médico | La crea un administrador; el médico no se autorregistra | Confirmar |
+| 9 | Registro de paciente | Requiere verificación de email antes de agendar | Implementado en Fase 2 |
+| 10 | Paciente ya existente | No duplicar historia; vincular cuenta mediante recepción o verificación | Implementado en Fase 2 |
+| 11 | Cuenta de médico | La crea un administrador; el médico no se autorregistra | Implementado en Fase 2 |
 | 12 | Pediatría | Por defecto exige derivación, salvo que se configure como excepción para menores | Confirmar |
 | 13 | Menores de edad | Requieren tutor/representante en una fase posterior | Confirmar |
 | 14 | Zona horaria | Guardar en UTC; configurar zona de la clínica para slots y reportes | Confirmar |
-| 15 | Alcance clínico | Este plan cubre agenda, cuenta, derivaciones y nota mínima; historia clínica completa queda para P2 | Confirmar |
+| 15 | Alcance clínico | Este plan cubre agenda, cuenta, derivaciones y nota mínima; historia clínica completa queda para P2 | Confirmado por alcance |
 
 ### Decisión recomendada sobre “pediatría”
 
@@ -84,31 +84,33 @@ La regla solicitada dice que solo las cuatro áreas son de acceso directo. Pedia
 - **Usuarios:** CRUD administrativo, asignación de roles, desbloqueo y revocación de sesiones.
 - **Pacientes:** CRUD con `persona`, historia clínica administrativa, datos de contacto y versión optimista.
 - **Médicos:** CRUD con `persona`, especialidad, licencia y estado.
-- **Especialidades:** catálogo básico con 8 registros.
+- **Especialidades:** catálogo con 12 registros, flags de acceso directo/derivación y duración por especialidad.
 - **Citas:** creación, consulta, actualización, cambio de estado, filtros y versión optimista.
-- **Concurrencia:** restricciones de exclusión para solapes de médico y paciente en citas `programada`/`confirmada`; detección de conflictos `23P01`, `40001`, `40P01`, `55P03`.
+- **Concurrencia:** restricciones de exclusión para solapes de médico y paciente en citas `programada`/`confirmada`, horarios recurrentes y bloqueos de agenda; detección de conflictos `23P01`, `40001`, `40P01`, `55P03`.
+- **Disponibilidad (esquema):** tablas `horarios_profesional` y `bloqueos_agenda`; falta el servicio de generación de slots y sus endpoints.
 - **Auditoría:** bitácora de acciones y consultas.
 - **Observabilidad:** logs JSON, `trace_id`, `X-Request-ID`, errores en base, retención y stack de Loki/Grafana local.
+- **Cuentas de paciente (Fase 2):** registro transaccional, validación de username/email/documento/edad/términos, rol `paciente`, token de verificación hasheado de un solo uso, reenvío, recuperación y reset de contraseña.
+- **Vinculación de cuentas:** si el documento ya existe como paciente sin cuenta, se crea una cuenta pendiente y una `solicitud_vinculacion`; recepción/admin la aprueba o rechaza sin duplicar la historia. La cuenta de médico se vincula por administración.
+- **Correo de desarrollo:** adaptador `DevEmailSender` que escribe `.eml` en un buzón local detrás del puerto `EmailSender`; no registra tokens.
+- **Derivaciones y notas (esquema):** migración 011 aplicada y validada con triggers y pruebas de integración; falta la capa de servicio y endpoints.
 
 ### 2.2 Lo que falta para el flujo solicitado
 
-- **Registro público de pacientes:** no existe `POST /auth/register`.
-- **Rol `paciente`:** no existe.
-- **Vínculo cuenta–paciente:** `usuarios` y `pacientes` están separados; no hay `pacientes.usuario_id`.
-- **Vínculo cuenta–médico:** `usuarios` y `medicos` están separados; no hay `medicos.usuario_id`.
 - **Portal del paciente:** no existen endpoints para perfil propio, catálogo, disponibilidad, citas propias ni derivaciones.
 - **Portal del médico:** no existen endpoints de “mi agenda”, “mi cita”, “marcar atendida” o “emitir derivación”.
-- **Disponibilidad:** no existen horarios de profesionales ni bloqueos de agenda; hoy se puede reservar cualquier hora si no hay solape.
-- **Especialidades solicitadas:** no existen `FISIO`, `ODONTO`, `NUTRI` ni `OTORRINO`.
-- **Derivaciones:** no existe tabla, estados, regla de acceso ni vínculo con la cita.
-- **Autorización por fila:** un médico con `citas:leer` puede consultar todas las citas; un paciente no existe, pero el patrón actual no está preparado para “solo lo mío”.
-- **Notificaciones:** no hay verificación de email, recuperación de contraseña, recordatorios ni outbox.
-- **Nota/atención clínica mínima:** una cita solo cambia de estado; no hay registro de la consulta que justifique una derivación.
+- **Disponibilidad:** las tablas y exclusiones existen; faltan CRUD administrativo, generación de slots, validación al reservar y zona horaria configurable.
+- **Especialidades solicitadas:** `FISIO`, `ODONTO`, `NUTRI` y `OTORRINO` ya están en el catálogo; faltan sus endpoints de portal.
+- **Derivaciones:** la tabla, triggers y pruebas de esquema existen; faltan servicio, endpoints, consumo y liberación desde la API.
+- **Autorización por fila:** un médico con `citas:leer` puede consultar todas las citas; el rol paciente existe, pero el patrón actual no está preparado para “solo lo mío”.
+- **Notificaciones transaccionales:** verificación y reset ya tienen correo de desarrollo; faltan recordatorios, confirmaciones y outbox durable.
+- **Nota/atención clínica mínima:** una cita solo cambia de estado; no hay endpoint para registrar la consulta que justifique una derivación.
 - **Historia clínica completa:** diagnósticos, recetas, órdenes, exámenes y adjuntos no están implementados.
+- **Menores de edad:** el autorregistro exige mayoría de edad configurable; falta el flujo de tutor/representante.
 
 ### 2.3 Conclusión de estado
 
-La base de agenda y seguridad es aprovechable, pero **el producto “paciente con cuenta que agenda y médico que deriva” no está terminado**. Hay que construirlo sobre lo existente, sin romper la arquitectura por capas ni las garantías de concurrencia.
+La base de agenda, seguridad y cuentas es aprovechable, pero **el producto “paciente con cuenta que agenda y médico que deriva” no está terminado**. La Fase 2 resolvió el alta y la vinculación; ahora hay que construir el portal y el ownership sobre lo existente, sin romper la arquitectura por capas ni las garantías de concurrencia.
 
 ---
 
@@ -411,7 +413,7 @@ No hardcodear códigos de especialidad en el código. La lista directa se contro
 
 ## 5. Modelo de datos y migraciones
 
-Numeración tentativa, continua desde la última migración aplicada (`008_consistencia_concurrencia.sql`). Cada migración debe ser idempotente en lo posible, probarse desde cero y probarse sobre una copia de la base actual.
+Numeración continua desde la última migración aplicada (`012_cuentas_vinculacion.sql`). Cada migración debe ser idempotente en lo posible, probarse desde cero y probarse sobre una copia de la base actual.
 
 ### 5.1 Migración 009 — cuentas, catálogo y permisos
 
@@ -569,6 +571,14 @@ CREATE INDEX IF NOT EXISTS bloqueos_agenda_medico_idx
 
 Los bloqueos se restan de los slots disponibles.
 
+**Implementación en la migración 010:**
+
+- `horarios_profesional_sin_solape` usa una exclusión GiST sobre `medico_id`, `dia_semana`, el rango de horas `[inicio, fin)` y el rango de vigencia `[vigente_desde, vigente_hasta]`; `vigente_hasta = NULL` significa vigencia indefinida. Solo aplica a filas `activo = true`.
+- `bloqueos_agenda_medico_sin_solape` impide dos bloqueos solapados del mismo médico usando `tstzrange(inicio, fin, '[)')`.
+- `hora_a_segundos(TIME)` es `IMMUTABLE` y permite indexar el rango horario sin depender de la zona horaria.
+- Ambas tablas tienen trigger de `updated_at`; `horarios_profesional` tiene `version` para el futuro CRUD con versión optimista.
+- La prueba `internal/repository/postgres/disponibilidad_concurrencia_test.go` abre dos transacciones y compite por el mismo horario/bloqueo. Se ejecuta con `scripts/prueba_concurrencia_disponibilidad.ps1` sobre una base temporal.
+
 ### 5.3 Migración 011 — derivaciones y metadata de citas
 
 #### `derivaciones`
@@ -617,6 +627,15 @@ Reglas de integridad que debe garantizar el servicio:
 
 Se puede agregar un trigger de validación, pero la fuente principal debe ser el servicio transaccional. El trigger es defensa en profundidad, no reemplazo de la prueba de negocio.
 
+**Implementación en la migración 011:**
+
+- `trg_derivaciones_consistencia` valida paciente, médico y cita de origen, que la cita esté `atendida`, que el origen sea Medicina General, que la especialidad destino requiera derivación y que el médico destino coincida con esa especialidad. Los errores usan `23514`.
+- `trg_citas_derivacion_consistencia` se dispara al insertar una cita o al cambiar `derivacion_id`, `paciente_id` o `medico_id`; exige la misma paciente, una derivación `pendiente` o `agendada`, vigencia futura y un médico de la especialidad destino. Marcar la cita como `atendida` no vuelve a consumir la derivación, porque el trigger no observa cambios de `estado`.
+- `trg_notas_cita_medico` impide que un médico distinto al de la cita registre la nota.
+- `citas_derivacion_activa_uk` incluye las citas `programada`, `confirmada` y `atendida`; una cita cancelada, no asistida o reprogramada libera la derivación.
+- `creada_por_usuario_id` queda `NULL` en citas históricas. `canal` queda en `recepcion` para no reinterpretar el flujo administrativo existente.
+- `notas_cita` tiene una fila por cita (`cita_id UNIQUE`), versión optimista, trigger de `updated_at` e índice por médico.
+
 #### `citas`
 
 Agregar:
@@ -655,7 +674,39 @@ CREATE TABLE IF NOT EXISTS notas_cita (
 
 Una cita puede tener una nota; la nota no reemplaza la historia clínica completa.
 
-### 5.4 Migración 012 — notificaciones y outbox
+### 5.4 Migración 012 — solicitudes de vinculación
+
+**Estado:** aplicada. Archivo `migrations/012_cuentas_vinculacion.sql`.
+
+```sql
+CREATE TABLE IF NOT EXISTS solicitudes_vinculacion (
+    id                        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    usuario_id                BIGINT NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
+    paciente_id               BIGINT NOT NULL REFERENCES pacientes (id) ON DELETE CASCADE,
+    estado                    VARCHAR(20) NOT NULL DEFAULT 'pendiente'
+        CHECK (estado IN ('pendiente', 'aprobada', 'rechazada')),
+    motivo                    TEXT NOT NULL DEFAULT '',
+    resuelta_por_usuario_id   BIGINT REFERENCES usuarios (id) ON DELETE SET NULL,
+    resuelta_en               TIMESTAMPTZ,
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS solicitudes_vinculacion_paciente_pendiente_uk
+    ON solicitudes_vinculacion (paciente_id)
+    WHERE estado = 'pendiente';
+
+CREATE UNIQUE INDEX IF NOT EXISTS solicitudes_vinculacion_usuario_pendiente_uk
+    ON solicitudes_vinculacion (usuario_id)
+    WHERE estado = 'pendiente';
+```
+
+- El registro con documento existente crea una cuenta pendiente y una solicitud; no duplica persona ni paciente.
+- Aprobar vincula `pacientes.usuario_id` y resuelve la solicitud en la misma transacción.
+- Rechazar exige motivo, desactiva la cuenta y revoca sus refresh tokens.
+- Los índices parciales impiden dos solicitudes pendientes para la misma historia o cuenta.
+
+### 5.5 Migración 013 — notificaciones y outbox (propuesta)
 
 Para no perder correos si el proveedor falla:
 
@@ -681,12 +732,12 @@ CREATE INDEX IF NOT EXISTS notificaciones_pendientes_idx
     ON notificaciones (estado, programada_en);
 ```
 
-- El registro de la cita y la notificación se hacen en la misma transacción (outbox).
+- El registro de la cita y la notificación se harán en la misma transacción (outbox).
 - Un worker separado envía y reintenta.
 - Nunca se guardan tokens de verificación/reset en texto plano ni en logs.
-- Para desarrollo se puede usar un adaptador que escribe en consola; para producción, SMTP/SES/SendGrid.
+- La Fase 2 usa un adaptador de archivo para desarrollo; para producción, SMTP/SES/SendGrid detrás de `service.EmailSender`.
 
-### 5.5 Backfill y compatibilidad
+### 5.6 Backfill y compatibilidad
 
 - No eliminar columnas existentes.
 - No cambiar el significado de `citas.estado` existente.
@@ -721,10 +772,15 @@ CREATE INDEX IF NOT EXISTS notificaciones_pendientes_idx
 | `POST` | `/auth/resend-verification` | Público, rate-limited | Reenvía verificación |
 | `POST` | `/auth/forgot-password` | Público, rate-limited | Solicita recuperación |
 | `POST` | `/auth/reset-password` | Público, rate-limited | Cambia contraseña con token |
-| `POST` | `/auth/login` | Público | Ya existe; validar email verificado si se decide |
-| `POST` | `/auth/refresh` | Público | Ya existe; rotación atómica |
+| `POST` | `/auth/login` | Público | Bloquea cuentas exclusivamente `paciente` sin email verificado |
+| `POST` | `/auth/refresh` | Público | Rotación atómica; también bloquea paciente sin verificar |
 | `POST` | `/auth/logout` | Autenticado | Ya existe |
-| `GET` | `/auth/me` | Autenticado | Extender con `paciente_id`, `medico_id`, `email_verificado`, roles |
+| `GET` | `/auth/me` | Autenticado | Devuelve roles, permisos y estado de verificación; falta `paciente_id`/`medico_id` |
+| `GET` | `/cuentas/vinculaciones` | `cuentas:vincular` | Lista solicitudes por estado, búsqueda y paginación |
+| `POST` | `/cuentas/vinculaciones/{id}/aprobar` | `cuentas:vincular` | Vincula la cuenta con la historia existente |
+| `POST` | `/cuentas/vinculaciones/{id}/rechazar` | `cuentas:vincular` | Rechaza con motivo y desactiva la cuenta pendiente |
+| `POST` | `/cuentas/vincular-paciente` | `cuentas:vincular` | Vinculación directa desde recepción |
+| `POST` | `/cuentas/vincular-medico` | `usuarios:escribir` | Vincula una cuenta con rol `medico` a un perfil existente |
 
 Registro propuesto:
 
@@ -752,21 +808,27 @@ Respuesta recomendada:
 {
   "data": {
     "usuario_id": 42,
+    "paciente_id": 18,
     "email": "juan.perez@example.com",
     "email_verificado": false,
-    "mensaje": "Revisa tu correo para verificar la cuenta"
+    "vinculacion_pendiente": false,
+    "mensaje": "Revisa tu correo para verificar la cuenta."
   }
 }
 ```
 
-Decisiones:
+Si el documento existe sin cuenta, la respuesta es `202` y agrega `solicitud_id` con `vinculacion_pendiente: true`.
 
-- No devolver tokens hasta verificar el email, salvo que se implemente un modo “cuenta limitada”.
-- Si el email ya existe, responder de forma genérica para no filtrar cuentas.
-- Si el documento ya existe como paciente, **no crear otro paciente**. Responder `409` con instrucción de vinculación o crear una solicitud de vinculación.
-- Si el documento no existe, crear `persona`, `paciente`, `usuario` y rol `paciente` en una sola transacción.
-- Guardar aceptación de términos y versión.
-- Auditar `registro`, `verificacion_email`, `reset_password`.
+Decisiones implementadas:
+
+- No se emiten tokens hasta verificar el email; el login y refresh de una cuenta exclusivamente `paciente` se rechazan con `403 email_no_verificado`.
+- El reenvío de verificación y la solicitud de reset responden de forma genérica para no filtrar si la cuenta existe. El registro con email duplicado devuelve `409`, porque el alta no puede completarse sin ambigüedad.
+- Si el documento ya existe como paciente **sin cuenta**, no se crea otro paciente: se crea una cuenta pendiente y una solicitud de vinculación. Si ya tiene una cuenta vinculada, devuelve `409`.
+- Si el documento no existe, se crean `persona`, `paciente`, `usuario`, rol `paciente`, token y auditoría en una sola transacción.
+- Se guarda la aceptación y la versión vigente de términos; el registro exige la mayoría de edad configurable.
+- Los tokens de verificación/reset se guardan como hash SHA-256, vencen y son de un solo uso. El reset verifica el email si faltaba, limpia bloqueos, incrementa `token_version` y revoca refresh tokens.
+- Se auditan registro, verificación, reset, reenvío, solicitud de recuperación y aprobación/rechazo de vinculación.
+- El adaptador de correo es de desarrollo (`outbox`); antes de producción se debe implementar un proveedor real detrás de `service.EmailSender`.
 
 ### 6.3 Portal del paciente
 
@@ -1000,22 +1062,24 @@ Tareas:
 
 ### Fase 2 — Registro, verificación y cuentas
 
+**Estado:** completado.
+
 **Objetivo:** que un paciente pueda crear una cuenta real y quedar vinculado a su perfil.
 
 Tareas:
 
-- `POST /auth/register` transaccional.
-- Validación de username, email, documento, edad y términos.
-- Creación de `persona`, `paciente`, `usuario`, rol `paciente`.
-- Token de verificación de email con hash, expiración y un solo uso.
-- `POST /auth/verify-email` y reenvío.
-- `POST /auth/forgot-password` y `POST /auth/reset-password`.
-- Revocación de sesiones al cambiar contraseña.
-- Adaptador de email de desarrollo (consola/archivo) y interfaz para proveedor real.
-- Rate limiting de registro, login y recuperación.
-- Auditoría de registro, verificación y reset.
-- Flujo para documento ya existente: no duplicar; vinculación por recepción o solicitud verificable.
-- Creación/vinculación de cuenta de médico por administración.
+- [x] `POST /auth/register` transaccional.
+- [x] Validación de username, email, documento, edad y términos.
+- [x] Creación de `persona`, `paciente`, `usuario`, rol `paciente`.
+- [x] Token de verificación de email con hash, expiración y un solo uso.
+- [x] `POST /auth/verify-email` y reenvío.
+- [x] `POST /auth/forgot-password` y `POST /auth/reset-password`.
+- [x] Revocación de sesiones al cambiar contraseña.
+- [x] Adaptador de email de desarrollo (archivo `.eml`) y puerto para proveedor real.
+- [x] Rate limiting de registro, verificación, reenvío, recuperación, reset y login.
+- [x] Auditoría de registro, verificación, reset, reenvío y solicitudes.
+- [x] Flujo para documento ya existente: no duplicar; solicitud de vinculación aprobada/rechazada por recepción.
+- [x] Creación/vinculación de cuenta de médico por administración.
 
 **Criterio de salida:** un paciente se registra, verifica, inicia sesión y su usuario queda ligado a un único paciente. Un documento duplicado no crea otra historia. Los tests cubren tokens vencidos, reutilizados y carreras de registro.
 
@@ -1194,6 +1258,10 @@ Tareas:
 - Migraciones sobre copia de la base actual.
 - Restricciones de exclusión de citas.
 - Índice único parcial de derivación activa.
+- Triggers de derivación: origen atendido, paciente y médico correctos, destino con derivación y médico destino de la especialidad.
+- Triggers de cita con derivación: mismo paciente, derivación vigente y disponible, médico de la especialidad destino.
+- Trigger de nota: solo el médico de la cita puede escribirla; una sola nota por cita.
+- Metadata de citas: `canal`, `creada_por_usuario_id`, `motivo_cancelacion` y `derivacion_id` con defaults compatibles.
 - Transacción de registro con rollback ante fallo.
 - Transacción de reserva con derivación.
 - Liberación de derivación al cancelar.
@@ -1232,6 +1300,9 @@ Tareas:
 - Dos reprogramaciones con la misma `version`: una `200`, una `409`.
 - Dos médicos intentan atender la misma cita: una transición válida, la otra `409`.
 - Creación simultánea de horarios solapados: no quedan dos horarios activos incompatibles.
+- La prueba automatizada de horarios y bloqueos está en `internal/repository/postgres/disponibilidad_concurrencia_test.go` y se ejecuta con `scripts/prueba_concurrencia_disponibilidad.ps1`.
+- Dos transacciones reservan con la misma derivación: una confirma y la otra recibe `23505`, verificado por `TestDerivacionConcurrenteSoloPermiteUnaCita`.
+- Las pruebas de derivaciones, notas y metadata están en `internal/repository/postgres/derivaciones_migracion_test.go` y se ejecutan con `scripts/prueba_derivaciones.ps1`.
 
 ### 8.5 Pruebas de seguridad
 
@@ -1285,21 +1356,21 @@ Una historia no está terminada si:
 
 ### 9.1 Checklist de seguridad
 
-- [ ] Registro público con rate limit y verificación de email.
-- [ ] Contraseñas con bcrypt y política existente.
-- [ ] Tokens de verificación/reset hasheados, de un solo uso y con expiración.
-- [ ] Reset de contraseña revoca sesiones.
+- [x] Registro público con rate limit y verificación de email.
+- [x] Contraseñas con bcrypt y política existente.
+- [x] Tokens de verificación/reset hasheados, de un solo uso y con expiración.
+- [x] Reset de contraseña revoca sesiones.
 - [ ] Paciente solo accede a sus datos.
 - [ ] Médico solo accede a su agenda y a pacientes con relación de atención.
 - [ ] Recepción no accede a funciones clínicas.
 - [ ] Admin con MFA antes de producción (si se habilita).
 - [ ] CORS con allowlist.
 - [ ] TLS en el proxy.
-- [ ] Secretos fuera del repositorio.
+- [x] Secretos fuera del repositorio.
 - [ ] Rate limiting distribuido.
-- [ ] Validación de payloads y límites de tamaño.
+- [x] Validación de payloads y límites de tamaño.
 - [ ] Redacción de PII en logs.
-- [ ] Consentimiento y términos versionados.
+- [x] Consentimiento y términos versionados.
 - [ ] Backups y restauración probados.
 - [ ] Revisión de dependencias y contenedores.
 
@@ -1325,6 +1396,8 @@ Una historia no está terminada si:
 | `sobrescribir_derivacion` | `cita` | actor, motivo, autorización |
 
 No guardar en auditoría el contenido completo de la nota clínica ni tokens.
+
+La Fase 2 registra `registro`, `registro_fallido`, `verificacion_email`, `verificacion_email_fallida`, `reset_password`, `reset_password_fallido`, `reenvio_verificacion`, `solicitud_reset_password`, `vinculacion_cuenta_aprobada`, `vinculacion_cuenta_rechazada`, `vinculacion_paciente` y `vinculacion_medico`. Un token inválido/vencido no permite identificar la cuenta, pero el intento queda auditado sin `usuario_id`/`username` y sujeto al rate limiter; el request también aparece en el log de solicitudes sin el token.
 
 ### 9.3 Observabilidad
 
@@ -1524,7 +1597,7 @@ Si se necesita una demo rápida antes de completar P1, el orden mínimo es:
 
 1. Fase 0: confirmar reglas.
 2. Fase 1: migraciones 009–011.
-3. Fase 2: registro/verificación con adaptador de email de consola.
+3. Fase 2: registro/verificación con adaptador de email de archivo (completada).
 4. Fase 3: actor/ownership.
 5. Fase 4: horarios y disponibilidad.
 6. Fase 5: cita directa.
@@ -1575,17 +1648,171 @@ Incluye:
 
 **Decisión de compatibilidad:** los permisos globales actuales de `medico` se conservan por ahora. El ownership y su retiro se harán cuando existan los endpoints de portal.
 
-### Siguiente paso — Paso 2: entidades y stores de la migración 009
+### Paso 2 — Entidades y stores de la migración 009
 
-Actualizar:
+**Estado:** completado.
 
-- `entities.Usuario` con verificación, términos y cambio de contraseña;
-- `entities.Paciente` y `entities.Medico` con `UsuarioID` y campos de perfil;
-- `entities.Especialidad` con los flags del catálogo;
-- `UsuarioStore`, `PacienteStore`, `MedicoStore` y `EspecialidadStore` para leer/escribir los campos nuevos;
-- pruebas de repositorio y de mapeo.
+Incluye:
 
-No se implementarán todavía endpoints de registro ni de portal. Eso corresponde a la Fase 2.
+- `entities.Usuario`: `EmailVerificadoEn`, `TerminosAceptadosEn`, `VersionTerminos`, `DebeCambiarPassword` y helper `EmailVerificado()`;
+- `entities.Paciente` y `entities.Medico`: vínculo `UsuarioID`;
+- `entities.Medico`: `DuracionCitaMin`, `Bio`, `FotoURL` y `AceptaPortal`;
+- `entities.Especialidad`: `RequiereDerivacion`, `Activa`, `Orden`, `DuracionCitaMin` y helper `AccesoDirecto()`;
+- stores de usuarios, pacientes, médicos y especialidades leyendo/escribiendo los campos nuevos;
+- métodos de cuenta `MarcarEmailVerificado`, `RegistrarAceptacionTerminos` y `EstablecerDebeCambiarPassword`;
+- métodos de vinculación `PacienteStore.VincularUsuario` y `MedicoStore.VincularUsuario`;
+- defaults seguros: especialidad nueva activa y con derivación obligatoria, duración de 30 minutos; médico nuevo con portal habilitado y duración de 30 minutos;
+- las actualizaciones de pacientes/médicos preservan el vínculo de cuenta y el perfil público;
+- pruebas de mapeo de los cuatro stores en `internal/repository/postgres/scan_portal_test.go`.
+
+**Validación realizada:**
+
+- `go build ./...`, `go vet ./...`, `gofmt -l .` y `go test -count=1 ./...` pasan;
+- consultas reales de lectura contra `medilist` para usuarios, pacientes, médicos y especialidades;
+- validación de escritura, lectura, defaults, actualización y vinculación en la base temporal `medilist_step2_check`, aplicando migraciones 001–009 desde cero;
+- base temporal y artefactos de prueba eliminados.
+
+No se modificaron endpoints ni DTOs de portal. Los flags de catálogo y el perfil público todavía se configuran por store; su exposición administrativa se hará junto con las rutas correspondientes.
+
+### Paso 3 — Migración 010 de disponibilidad
+
+**Estado:** completado.
+
+**Archivo:** `migrations/010_disponibilidad.sql`.
+
+Incluye:
+
+- tabla `horarios_profesional` con día de semana, hora local, duración de slot, vigencia, estado y versión;
+- tabla `bloqueos_agenda` con rangos UTC, motivo y usuario creador;
+- función inmutable `hora_a_segundos(TIME)`;
+- restricción `horarios_profesional_sin_solape` para horarios activos del mismo médico, día, hora y vigencia;
+- restricción `bloqueos_agenda_medico_sin_solape` para bloqueos solapados del mismo médico;
+- índices de consulta y triggers de `updated_at`;
+- comentarios de tabla para documentar horas locales y bloqueos UTC.
+
+**Pruebas de concurrencia:**
+
+- `TestHorarioConcurrenteNoPermiteSolape`: dos transacciones compiten por horarios solapados; exactamente una confirma y la otra recibe `23P01`.
+- `TestBloqueoConcurrenteNoPermiteSolape`: el mismo escenario para bloqueos puntuales.
+- `TestHorariosCompatiblesSePermiten`: horarios adyacentes, de otro día, con vigencia disjunta o inactivos.
+- `TestBloqueosCompatiblesSePermiten`: bloqueos adyacentes y de otro médico.
+- Script repetible: `scripts/prueba_concurrencia_disponibilidad.ps1`.
+
+**Validación realizada:**
+
+- migración aplicada desde una base vacía (001–010);
+- migración 010 ejecutada dos veces para verificar idempotencia;
+- migración aplicada sobre una copia de `medilist`;
+- migración aplicada a `medilist`;
+- prueba de concurrencia ejecutada sobre base temporal creada desde cero;
+- `gofmt -l .`, `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan;
+- bases temporales eliminadas.
+
+No se crearon todavía entidades, stores, servicios ni endpoints de disponibilidad. La generación de slots y la validación de reservas corresponde a la Fase 4.
+
+### Paso 4 — Migración 011 de derivaciones y metadata de citas
+
+**Estado:** completado.
+
+**Archivo:** `migrations/011_derivaciones_metadata.sql`.
+
+Incluye:
+
+- tabla `derivaciones` con paciente, médico y cita de origen, especialidad y médico destino, motivo, prioridad, estado, vigencia, versión y motivo de cancelación;
+- índices por paciente/estado/vigencia, cita de origen, especialidad destino y médico destino;
+- trigger `trg_derivaciones_consistencia` para validar el origen clínico y el destino;
+- columnas nuevas en `citas`: `derivacion_id`, `canal`, `creada_por_usuario_id` y `motivo_cancelacion`;
+- índice único parcial `citas_derivacion_activa_uk` para impedir dos citas activas o atendidas con la misma derivación;
+- trigger `trg_citas_derivacion_consistencia` para validar paciente, especialidad, estado y vigencia al vincular una cita;
+- tabla `notas_cita` con una nota por cita, versión optimista, `updated_at` e índice por médico;
+- trigger `trg_notas_cita_medico` para que solo el médico de la cita escriba la nota;
+- triggers de `updated_at` para `derivaciones` y `notas_cita`.
+
+**Pruebas de integración:**
+
+- `TestDerivacionValidaYRechazaOrigenInvalido`: una derivación válida se crea; se rechazan cita no atendida, paciente distinto, médico de origen distinto, destino sin derivación y médico destino de otra especialidad.
+- `TestDerivacionUnaSolaCitaActiva`: la segunda cita activa falla con `23505`; cancelar la primera libera la derivación; una cita atendida sigue consumiéndola.
+- `TestDerivacionCitaValidaPacienteEspecialidadYEstado`: se rechazan cita de otro paciente, médico de otra especialidad, derivación cancelada y derivación vencida.
+- `TestDerivacionConcurrenteSoloPermiteUnaCita`: dos transacciones compiten por la misma derivación; una confirma y la otra recibe `23505`.
+- `TestNotaCitaSoloMedicoDeLaCita`: se rechaza la nota de otro médico y la segunda nota de la misma cita.
+- `TestCitasMetadataPorDefecto`: las citas nuevas quedan con `canal = recepcion`, sin actor, sin derivación y sin motivo de cancelación.
+- Script repetible: `scripts/prueba_derivaciones.ps1`.
+
+**Validación realizada:**
+
+- migración aplicada desde una base vacía (001–011);
+- migración 011 ejecutada dos veces para verificar idempotencia;
+- migración aplicada sobre una copia de `medilist`;
+- migración aplicada a `medilist`;
+- pruebas de derivaciones, notas y metadata ejecutadas sobre base temporal creada desde cero, incluida la prueba de concurrencia;
+- suite completa con `TEST_DATABASE_URL` y suite normal sin integración;
+- `gofmt -l .`, `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan;
+- bases temporales eliminadas;
+- `medilist` conserva 12 especialidades, 0 pacientes, 0 médicos, 0 citas, 0 derivaciones, 0 notas y solo el usuario `admin`.
+
+No se crearon todavía entidades, stores, servicios ni endpoints de derivaciones o notas. Esa lógica corresponde a las fases de médico y reserva de especialista; la migración 011 solo refuerza el esquema y sus invariantes.
+
+### Paso 5 — Fase 2: registro, verificación y cuentas
+
+**Estado:** completado.
+
+**Migración:** `migrations/012_cuentas_vinculacion.sql`.
+
+Incluye:
+
+- tabla `solicitudes_vinculacion` con estado `pendiente`, `aprobada` o `rechazada`, motivo, actor y fecha de resolución;
+- índice único parcial para impedir dos solicitudes pendientes de la misma historia;
+- índice único parcial para impedir dos solicitudes pendientes de la misma cuenta;
+- trigger de `updated_at`.
+
+**Capa de aplicación:**
+
+- `entities.TokenCuenta`, `entities.SolicitudVinculacion` y filtros;
+- puertos `CuentaStore` y `EmailSender`; búsquedas `PacienteStore.BuscarPorDocumento` y `UsuarioStore.BuscarPorEmail`;
+- `CuentaStore` transaccional para alta, cuenta pendiente, consumo de tokens, reset, aprobación, rechazo y vínculo de médico;
+- `CuentaService` con validación de username/email/documento/edad/términos y enlaces configurables;
+- `DevEmailSender` con buzón local `.eml`, permisos `0700/0600` y sin tokens en logs;
+- `CuentaHandler` y DTOs para registro, verificación, reenvío, recuperación, reset y vinculación;
+- bloqueo de login y refresh para cuentas exclusivamente `paciente` sin email verificado (`403 email_no_verificado`);
+- configuración `EMAIL_*`, `TERMS_VERSION` y `MIN_EDAD_CUENTA`; `.env.example` y `.gitignore` actualizados.
+
+**Rutas registradas:**
+
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/verify-email`
+- `POST /api/v1/auth/resend-verification`
+- `POST /api/v1/auth/forgot-password`
+- `POST /api/v1/auth/reset-password`
+- `GET /api/v1/cuentas/vinculaciones`
+- `POST /api/v1/cuentas/vinculaciones/{id}/aprobar`
+- `POST /api/v1/cuentas/vinculaciones/{id}/rechazar`
+- `POST /api/v1/cuentas/vincular-paciente`
+- `POST /api/v1/cuentas/vincular-medico`
+
+**Pruebas automatizadas:**
+
+- `TestCuentaStoreRegistroVerificaTokenUnSoloUso`: alta transaccional y segundo uso rechazado.
+- `TestCuentaStoreDocumentoDuplicadoNoDuplicaPaciente`: el documento conserva una persona y un paciente.
+- `TestCuentaStoreRegistroConcurrenteMismoDocumento`: dos registros compiten; exactamente uno crea y el otro recibe `409`.
+- `TestCuentaStoreTokenVencidoYReutilizado`: token vencido no verifica; token nuevo funciona una sola vez.
+- `TestCuentaStoreResetPasswordRevocaSesiones`: cambia hash, verifica email, incrementa `token_version` y revoca refresh tokens.
+- `TestCuentaStoreSolicitudVinculacionAprobarYListar`: no duplica la historia y la aprueba.
+- `TestCuentaStoreRechazarSolicitudDesactivaCuenta`: rechazo con desactivación.
+- `TestCuentaStoreVincularMedico`: vínculo de cuenta con perfil médico.
+- Tests de servicio para validaciones, correo, reenvío genérico, reset y auditoría, incluidos tokens inválidos auditados; test de login sin email verificado y de contraseña incorrecta que no revela el estado.
+- Script repetible: `scripts/prueba_cuentas.ps1`.
+
+**Validación realizada:**
+
+- migración 012 aplicada a `medilist` y a una base temporal desde cero;
+- migración 012 ejecutada dos veces sobre `medilist` para verificar idempotencia, con índices y trigger presentes;
+- pruebas de cuentas y suite completa con `TEST_DATABASE_URL`;
+- `gofmt -l .`, `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan;
+- flujo HTTP real: registro, verificación, login bloqueado antes de verificar, reenvío, recuperación, reset, rechazo de reutilización de token y vinculación de un paciente histórico sin duplicarlo;
+- base de prueba temporal eliminada y datos HTTP de prueba eliminados;
+- `medilist` queda con 1 usuario (`admin`), 0 pacientes, 0 personas, 0 solicitudes y 0 tokens de cuenta.
+
+**Pendiente inmediato:** Fase 3. Extender el middleware con `Actor`, resolver `paciente_id`/`medico_id` desde los vínculos, aplicar ownership en citas/pacientes/derivaciones y crear el perfil propio. Los permisos `portal:*` ya existen en la base, pero todavía no hay endpoints que los usen.
 
 
 

@@ -5,11 +5,16 @@ import "time"
 // Medico es un profesional de la salud habilitado para atender citas.
 type Medico struct {
 	ID              int64
+	UsuarioID       *int64
 	Persona         Persona
 	EspecialidadID  int64
 	Especialidad    Especialidad
 	NumeroLicencia  string
 	TipoProfesional string
+	DuracionCitaMin int
+	Bio             string
+	FotoURL         string
+	AceptaPortal    bool
 	Activo          bool
 	Version         int64
 	CreatedAt       time.Time

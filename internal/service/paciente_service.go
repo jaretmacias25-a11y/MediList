@@ -60,6 +60,7 @@ func (s *PacienteService) Actualizar(ctx context.Context, id int64, p entities.P
 	normalizarPaciente(&p)
 	p.ID = id
 	p.Persona.ID = actual.Persona.ID
+	p.UsuarioID = actual.UsuarioID
 	p.NumeroHistoria = actual.NumeroHistoria
 	p.Activo = actual.Activo
 	p.Version = actual.Version

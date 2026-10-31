@@ -24,6 +24,7 @@ func (p Persona) NombreCompleto() string {
 // Paciente es el perfil clínico-administrativo de una persona.
 type Paciente struct {
 	ID                         int64
+	UsuarioID                  *int64
 	Persona                    Persona
 	NumeroHistoria             string
 	GrupoSanguineo             string

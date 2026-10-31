@@ -1,8 +1,8 @@
 # MediList - API de gestión hospitalaria
 
-Backend en **Go** para la gestión de pacientes, médicos, especialidades y citas de una clínica. Implementa una **arquitectura limpia por capas** con persistencia en **PostgreSQL**, autenticación **JWT**, control de acceso basado en roles (**RBAC**) y auditoría de seguridad.
+Backend en **Go** para la gestión de pacientes, médicos, especialidades y citas de una clínica. Implementa una **arquitectura limpia por capas** con persistencia en **PostgreSQL**, autenticación **JWT**, control de acceso basado en roles (**RBAC**), cuentas de paciente con verificación de email, vinculación con historias existentes y auditoría de seguridad.
 
-El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda y la infraestructura de seguridad para extender el resto de módulos.
+El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad y la Fase 2 de cuentas de paciente: registro, verificación de email, recuperación de contraseña y vinculación con historias existentes.
 
 ---
 
@@ -47,16 +47,20 @@ MediList/
 │   │   ├── entities/                   # entidades del dominio
 │   │   ├── ports.go                    # interfaces de repositorio
 │   │   ├── auth_service.go             # login, refresh, bloqueo, cambio de clave
+│   │   ├── cuenta_service.go           # registro, verificación, reset y vinculación
 │   │   ├── error_service.go            # errores agregados (stdout + PostgreSQL)
 │   │   ├── retention_service.go        # retención de errores y auditoría
 │   │   ├── password.go                 # bcrypt y política de contraseñas
 │   │   ├── tokens.go                   # emisión y validación JWT
 │   │   ├── usuario_service.go          # usuarios, roles y auditoría
 │   │   └── *_service.go                # casos de uso clínicos
+│   ├── notificaciones/
+│   │   └── email_dev.go                # buzón local .eml para desarrollo
 │   ├── repository/postgres/
 │   │   ├── db.go                       # pool pgx
 │   │   ├── errors.go                   # traducción de errores SQL
 │   │   ├── usuario_store.go            # usuarios, roles, bloqueos y token_version
+│   │   ├── cuenta_store.go             # registro, tokens y solicitudes de vinculación
 │   │   ├── refresh_token_store.go      # refresh tokens hasheados
 │   │   ├── auditoria_store.go          # bitácora
 │   │   ├── error_store.go              # errores agregados
@@ -72,6 +76,7 @@ MediList/
 │       ├── middleware.go               # logging, recovery y cabeceras
 │       ├── dto.go                      # contratos JSON clínicos
 │       ├── auth_dto.go                 # contratos JSON de auth/usuarios
+│       ├── cuenta_dto.go               # contratos de registro y vinculación
 │       └── *_handler.go                # endpoints
 ├── migrations/
 │   ├── 001_init.sql                    # tablas clínicas, índices y triggers
@@ -82,7 +87,10 @@ MediList/
 │   ├── 006_errores.sql                 # errores agregados y permiso errores:leer
 │   ├── 007_observabilidad.sql          # instancia, trace_id de auditoría e índices
 │   ├── 008_consistencia_concurrencia.sql # exclusiones de agenda, versiones y trigger
-│   └── 009_portal_paciente.sql         # cuentas, catálogo, tokens y permisos del portal
+│   ├── 009_portal_paciente.sql         # cuentas, catálogo, tokens y permisos del portal
+│   ├── 010_disponibilidad.sql          # horarios recurrentes, bloqueos y exclusiones
+│   ├── 011_derivaciones_metadata.sql   # derivaciones, metadata de citas y notas
+│   └── 012_cuentas_vinculacion.sql     # solicitudes de vinculación de cuentas
 ├── deploy/observability/               # Loki + Promtail + Grafana + alertas
 │   ├── docker-compose.yml
 │   ├── loki/loki-config.yml
@@ -91,6 +99,9 @@ MediList/
 ├── scripts/
 │   ├── migrate.ps1                     # crea BD y aplica migraciones
 │   ├── observability.ps1               # levanta/consulta el stack local
+│   ├── prueba_concurrencia_disponibilidad.ps1 # prueba horarios/bloqueos concurrentes
+│   ├── prueba_cuentas.ps1              # registro, tokens, reset y vinculación
+│   ├── prueba_derivaciones.ps1         # prueba derivaciones, notas y metadata
 │   ├── solapes_citas.sql               # diagnostica solapes antes de migrar
 │   └── run.ps1                         # inicia la API
 ├── .env                                # configuración local (no versionar)
@@ -143,6 +154,16 @@ MediList/
    RETENTION_INTERVAL_HOURS=24
    ERROR_RETENTION_DAYS=90
    AUDIT_RETENTION_DAYS=365
+
+   # Cuentas de paciente y correo de desarrollo.
+   EMAIL_PROVIDER=outbox
+   EMAIL_FROM=MediList <no-reply@medilist.local>
+   EMAIL_OUTBOX_DIR=outbox/emails
+   EMAIL_LINK_BASE_URL=http://localhost:3000
+   EMAIL_VERIFICATION_HOURS=24
+   PASSWORD_RESET_MINUTES=60
+   TERMS_VERSION=2026-10
+   MIN_EDAD_CUENTA=18
    ```
 
    Reemplaza `postgres` y `TU_PASSWORD_LOCAL` por el usuario y la contraseña que tengas configurados en tu propia instalación local de PostgreSQL. No publiques contraseñas reales en el README ni en archivos versionados.
@@ -160,6 +181,26 @@ MediList/
    El script detecta `psql.exe`, crea la base `medilist` si no existe y ejecuta los archivos de `migrations/` en orden.
 
    La migración `008_consistencia_concurrencia.sql` crea la extensión `btree_gist` y las restricciones de exclusión de agenda. El usuario de migración necesita permiso para crear extensiones, o la extensión debe estar instalada previamente por un administrador. Si existen citas solapadas de antes de esta versión, la migración se detiene de forma segura para no alterar datos clínicos: ejecuta `scripts/solapes_citas.sql`, corrige los horarios/estados indicados y vuelve a ejecutar la migración.
+
+   La migración `010_disponibilidad.sql` agrega `horarios_profesional` y `bloqueos_agenda`. Sus restricciones de exclusión impiden solapes activos del mismo médico por día, hora y vigencia, y bloqueos puntuales solapados. La prueba de concurrencia se ejecuta sobre una base temporal con:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_concurrencia_disponibilidad.ps1 -Password "TU_PASSWORD_LOCAL"
+   ```
+
+   La migración `011_derivaciones_metadata.sql` agrega `derivaciones`, la metadata de `citas` y `notas_cita`. Refuerza en PostgreSQL las reglas de origen atendido, destino con derivación, médico correcto, nota por médico e impide dos citas activas o atendidas con la misma derivación mediante un índice único parcial. Sus pruebas se ejecutan sobre una base temporal con:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_derivaciones.ps1 -Password "TU_PASSWORD_LOCAL"
+   ```
+
+   La migración `012_cuentas_vinculacion.sql` agrega `solicitudes_vinculacion`. Una historia clínica existente sin cuenta no se duplica: el registro crea una cuenta pendiente y una solicitud que recepción debe aprobar o rechazar. Los índices únicos parciales impiden dos solicitudes pendientes para el mismo paciente o la misma cuenta. Las pruebas de registro, tokens vencidos/reutilizados, reset, revocación y carreras se ejecutan con:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_cuentas.ps1 -Password "TU_PASSWORD_LOCAL"
+   ```
+
+   El correo de desarrollo se escribe en `outbox/emails/*.eml`; el token no aparece en logs. Antes de producción se debe implementar un proveedor real detrás de `service.EmailSender` y cambiar `EMAIL_PROVIDER`. La API actualmente solo acepta `EMAIL_PROVIDER=outbox` y emite una advertencia si se usa en producción.
 
 3. **Iniciar la API**:
 
@@ -192,7 +233,57 @@ La migración crea un administrador:
 
 Base URL: `http://localhost:8080/api/v1`
 
-### Flujo
+### Registro y verificación de pacientes
+
+1. `POST /auth/register` crea en una sola transacción la persona, el paciente, la cuenta, el rol `paciente`, el token de verificación y la auditoría. No emite sesión.
+2. La API escribe un correo con un enlace de un solo uso en el buzón de desarrollo (`outbox/emails/`).
+3. `POST /auth/verify-email` consume el token. Un token vencido o ya usado devuelve `400`.
+4. `POST /auth/resend-verification` invalida el enlace anterior y emite uno nuevo.
+5. `POST /auth/login` solo funciona para una cuenta de paciente cuando su email ya está verificado. Las cuentas internas existentes (`admin`, `medico`, `recepcion`, etc.) quedan exentas para no bloquear la operación durante la transición.
+6. `POST /auth/forgot-password` y `POST /auth/reset-password` permiten recuperar la contraseña. El reset verifica el email si aún no lo estaba, incrementa `token_version`, limpia bloqueos y revoca todos los refresh tokens.
+
+Si el documento ya existe como paciente sin cuenta, el registro **no crea otra historia clínica**. Devuelve `202` con una `solicitud_id`; recepción debe aprobar la vinculación después de validar la identidad. Si el documento ya tiene una cuenta vinculada, devuelve `409`.
+
+```powershell
+$registro = @{
+  username = "juan.perez"
+  email = "juan.perez@example.com"
+  password = "UnaClaveSegura123!"
+  nombres = "Juan"
+  apellidos = "Pérez"
+  tipo_documento = "CEDULA"
+  numero_documento = "0102030405"
+  fecha_nacimiento = "1990-05-12"
+  sexo = "masculino"
+  telefono = "+593999999999"
+  direccion = "Av. Principal y Calle 1"
+  acepta_terminos = $true
+  version_terminos = "2026-10"
+} | ConvertTo-Json
+
+$alta = Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8080/api/v1/auth/register `
+  -ContentType "application/json" -Body $registro
+```
+
+Respuesta de un paciente nuevo:
+
+```json
+{
+  "data": {
+    "usuario_id": 42,
+    "paciente_id": 18,
+    "email": "juan.perez@example.com",
+    "email_verificado": false,
+    "vinculacion_pendiente": false,
+    "mensaje": "Revisa tu correo para verificar la cuenta."
+  }
+}
+```
+
+El enlace del correo apunta a `EMAIL_LINK_BASE_URL` y contiene el token en claro solo en el buzón; la base guarda únicamente su hash SHA-256. Nunca copies tokens a logs ni a la auditoría.
+
+### Flujo de sesión
 
 1. `POST /auth/login` con `username` y `password`.
 2. La API devuelve un **access token** (15 min por defecto) y un **refresh token** (7 días por defecto).
@@ -213,11 +304,66 @@ Base URL: `http://localhost:8080/api/v1`
 
 | Método | Ruta | Autenticación | Descripción |
 |---|---|---|---|
-| `POST` | `/auth/login` | Pública | Inicia sesión y emite tokens |
+| `POST` | `/auth/register` | Pública, rate-limited | Registra paciente o crea solicitud de vinculación |
+| `POST` | `/auth/verify-email` | Pública, rate-limited | Consume el token de verificación |
+| `POST` | `/auth/resend-verification` | Pública, rate-limited | Reenvía verificación sin revelar si la cuenta existe |
+| `POST` | `/auth/forgot-password` | Pública, rate-limited | Solicita recuperación sin revelar si la cuenta existe |
+| `POST` | `/auth/reset-password` | Pública, rate-limited | Cambia la contraseña y revoca sesiones |
+| `POST` | `/auth/login` | Pública | Inicia sesión y emite tokens; bloquea pacientes sin email verificado |
 | `POST` | `/auth/refresh` | Refresh token | Rota el refresh token y emite un nuevo par |
 | `POST` | `/auth/logout` | Refresh token | Revoca el refresh token |
-| `GET` | `/auth/me` | Bearer | Devuelve el usuario, roles y permisos actuales |
+| `GET` | `/auth/me` | Bearer | Devuelve el usuario, roles, permisos y estado de verificación |
 | `POST` | `/auth/password` | Bearer | Cambia la contraseña del usuario autenticado |
+
+Los límites en memoria por instancia son: 5 registros por IP/hora; 30 verificaciones por IP/minuto; 3 reenvíos por IP+email/15 minutos; 5 solicitudes de recuperación por IP+email/15 minutos; 10 resets por IP/15 minutos. La respuesta `429` incluye `Retry-After`.
+
+Ejemplo de recuperación:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8080/api/v1/auth/forgot-password `
+  -ContentType "application/json" `
+  -Body (@{ email = "juan.perez@example.com" } | ConvertTo-Json)
+
+# El token se lee del .eml del buzón de desarrollo.
+Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8080/api/v1/auth/reset-password `
+  -ContentType "application/json" `
+  -Body (@{
+    token = "<token-del-correo>"
+    password_nueva = "OtraClaveSegura456!"
+  } | ConvertTo-Json)
+```
+
+### Vinculación de cuentas
+
+Solo `admin` y `recepcion` pueden aprobar o rechazar solicitudes (`cuentas:vincular`). La cuenta pendiente puede verificar su email, pero no obtiene acceso a datos clínicos hasta que la vinculación se apruebe. Al rechazar, la cuenta se desactiva y se revocan sus sesiones.
+
+| Método | Ruta | Permiso | Descripción |
+|---|---|---|---|
+| `GET` | `/cuentas/vinculaciones` | `cuentas:vincular` | Lista solicitudes; filtros `estado`, `search`, paginación |
+| `POST` | `/cuentas/vinculaciones/{id}/aprobar` | `cuentas:vincular` | Vincula la cuenta con la historia existente |
+| `POST` | `/cuentas/vinculaciones/{id}/rechazar` | `cuentas:vincular` | Rechaza con `motivo` obligatorio y desactiva la cuenta |
+| `POST` | `/cuentas/vincular-paciente` | `cuentas:vincular` | Vinculación directa desde recepción |
+| `POST` | `/cuentas/vincular-medico` | `usuarios:escribir` | Asocia una cuenta con rol `medico` a un perfil médico |
+
+```powershell
+Invoke-RestMethod -Method Get `
+  -Uri "http://localhost:8080/api/v1/cuentas/vinculaciones?estado=pendiente&search=0102030405" `
+  -Headers $headers
+
+Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8080/api/v1/cuentas/vinculaciones/7/aprobar `
+  -Headers $headers
+```
+
+Rechazo:
+
+```json
+{
+  "motivo": "El documento no coincide con la historia clínica"
+}
+```
 
 ### Ejemplo de login
 
@@ -278,27 +424,31 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 |---|---|
 | `admin` | Acceso total, gestión de usuarios y auditoría |
 | `medico` | Consulta clínica y gestión de citas |
-| `recepcion` | Gestión de pacientes y agenda |
+| `recepcion` | Gestión de pacientes, agenda y vinculación de cuentas |
 | `enfermeria` | Consulta de pacientes, médicos y citas |
 | `auditor` | Consulta de usuarios, roles y auditoría |
+| `paciente` | Cuenta propia y permisos de portal; los endpoints de portal llegan en la Fase 3 |
 
 ### Matriz de permisos
 
-| Recurso | `admin` | `medico` | `recepcion` | `enfermeria` | `auditor` |
-|---|---|---|---|---|---|
-| Pacientes (leer) | Sí | Sí | Sí | Sí | No |
-| Pacientes (escribir) | Sí | No | Sí | No | No |
-| Médicos (leer) | Sí | Sí | Sí | Sí | No |
-| Médicos (escribir) | Sí | No | No | No | No |
-| Especialidades (leer) | Sí | Sí | Sí | Sí | No |
-| Especialidades (escribir) | Sí | No | No | No | No |
-| Citas (leer) | Sí | Sí | Sí | Sí | No |
-| Citas (escribir) | Sí | Sí | Sí | No | No |
-| Usuarios (leer) | Sí | No | No | No | Sí |
-| Usuarios (escribir) | Sí | No | No | No | No |
-| Roles (leer) | Sí | No | No | No | Sí |
-| Auditoría (leer) | Sí | No | No | No | Sí |
-| Errores (leer) | Sí | No | No | No | Sí |
+| Recurso | `admin` | `medico` | `recepcion` | `enfermeria` | `auditor` | `paciente` |
+|---|---|---|---|---|---|---|
+| Pacientes (leer) | Sí | Sí | Sí | Sí | No | No |
+| Pacientes (escribir) | Sí | No | Sí | No | No | No |
+| Médicos (leer) | Sí | Sí | Sí | Sí | No | No |
+| Médicos (escribir) | Sí | No | No | No | No | No |
+| Especialidades (leer) | Sí | Sí | Sí | Sí | No | No |
+| Especialidades (escribir) | Sí | No | No | No | No | No |
+| Citas (leer) | Sí | Sí | Sí | Sí | No | No |
+| Citas (escribir) | Sí | Sí | Sí | No | No | No |
+| Cuentas (vincular) | Sí | No | Sí | No | No | No |
+| Usuarios (leer) | Sí | No | No | No | Sí | No |
+| Usuarios (escribir) | Sí | No | No | No | No | No |
+| Roles (leer) | Sí | No | No | No | Sí | No |
+| Auditoría (leer) | Sí | No | No | No | Sí | No |
+| Errores (leer) | Sí | No | No | No | Sí | No |
+
+El rol `paciente` ya tiene permisos `portal:*` y `catalogo:leer` en la base; todavía no existen las rutas de portal que los consumen.
 
 ### Administración de usuarios
 
@@ -401,6 +551,7 @@ programada -> confirmada -> atendida
 Las operaciones que pueden competir entre sí están protegidas también en PostgreSQL, no solo con validaciones previas en el servicio:
 
 - **Solapamiento de agenda:** las restricciones `citas_medico_sin_solape` y `citas_paciente_sin_solape` usan `EXCLUDE USING gist` sobre intervalos `[inicio, fin)`. Solo cuentan las citas `programada` y `confirmada`; una cita cancelada, atendida, no asistida o reprogramada libera el horario. Dos solicitudes simultáneas para el mismo médico o el mismo paciente producen una cita y un `409 Conflict`, nunca dos.
+- **Horarios y bloqueos:** `horarios_profesional_sin_solape` impide dos horarios activos del mismo médico que se solapen en día, hora y vigencia. `bloqueos_agenda_medico_sin_solape` impide dos bloqueos puntuales solapados del mismo médico. Las horas de los horarios son locales de la clínica; los bloqueos se guardan en UTC. La prueba de concurrencia crea dos transacciones que compiten por el mismo horario/bloqueo y exige exactamente un conflicto `23P01`.
 - **Actualizaciones perdidas:** especialidades, pacientes, médicos, citas y usuarios tienen una columna `version`. Las respuestas incluyen `version` y los `PUT` pueden enviarla; si el registro cambió desde que el cliente lo leyó, la escritura devuelve `409` en lugar de sobrescribir cambios ajenos. Aunque el cliente no envíe `version`, el servicio usa la versión leída al inicio de la operación y la base vuelve a comprobarla al escribir.
 - **Transiciones de estado:** dos cambios simultáneos sobre la misma cita solo aplican uno; el otro devuelve `409`. La cancelación es idempotente si la cita ya quedó cancelada.
 - **Participantes activos:** al crear una cita se bloquean las filas del paciente y del médico dentro de la transacción para que una baja concurrente no se cuele entre la validación y el `INSERT`. Un trigger de PostgreSQL refuerza la validación de participantes y fechas.
@@ -590,14 +741,16 @@ Códigos:
 
 | Código | Significado |
 |---|---|
-| `400` | Validación |
+| `400` | Validación o token de cuenta vencido/reutilizado |
 | `401` | Token ausente, inválido, expirado o sesión revocada |
-| `403` | Sin permiso para el recurso |
+| `403` | Sin permiso para el recurso o email no verificado (`email_no_verificado`) |
 | `404` | No encontrado |
-| `409` | Conflicto (documento duplicado, solape de agenda) |
+| `409` | Conflicto (documento duplicado, solicitud ya resuelta, solape de agenda) |
 | `423` | Cuenta bloqueada temporalmente |
-| `429` | Demasiadas solicitudes |
+| `429` | Demasiadas solicitudes; incluye `Retry-After` |
 | `500` | Error interno |
+
+El registro devuelve `201` para una historia nueva y `202` cuando crea una solicitud de vinculación. El reenvío y la solicitud de reset devuelven `202` aunque la cuenta no exista, para no filtrar información.
 
 ---
 
@@ -678,6 +831,29 @@ Invoke-RestMethod -Uri http://localhost:8080/api/v1/citas/1/estado `
 
 ---
 
+## Pruebas
+
+Suite normal (las pruebas de integración se omiten si no existe `TEST_DATABASE_URL`):
+
+```powershell
+gofmt -l .
+go build ./...
+go vet ./...
+go test -count=1 ./...
+```
+
+Pruebas de persistencia y concurrencia sobre una base temporal creada desde cero:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_cuentas.ps1 -Password "TU_PASSWORD_LOCAL"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_derivaciones.ps1 -Password "TU_PASSWORD_LOCAL"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_concurrencia_disponibilidad.ps1 -Password "TU_PASSWORD_LOCAL"
+```
+
+Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos registros concurrentes del mismo documento, verificación de un solo uso, token vencido y reutilizado, reset con revocación de refresh tokens, aprobación/rechazo de vinculación y vinculación de médico. También se prueba que el login de un paciente sin email verificado no emite sesión y que una contraseña incorrecta no revela el estado de verificación.
+
+---
+
 ## Entidades implementadas
 
 | Entidad | Tabla | Almacén |
@@ -693,11 +869,13 @@ Invoke-RestMethod -Uri http://localhost:8080/api/v1/citas/1/estado `
 | UsuarioRol | `usuario_roles` | `UsuarioStore` |
 | RolPermiso | `rol_permisos` | `RolStore` |
 | RefreshToken | `refresh_tokens` | `RefreshTokenStore` |
+| TokenCuenta | `tokens_cuenta` | `CuentaStore` |
+| SolicitudVinculacion | `solicitudes_vinculacion` | `CuentaStore` |
 | Auditoría | `auditoria` | `AuditoriaStore` |
 | ErrorAplicacion | `errores_aplicacion` | `ErrorStore` |
 | Retención | `auditoria`, `errores_aplicacion` | `RetentionStore` |
 
-El resto del modelo (historia clínica, hospitalización, farmacia, facturación) puede agregarse replicando el patrón: entidad en `service/entities`, puerto en `service/ports.go`, caso de uso en `service`, almacén en `repository/postgres` y handler en `transport/http`.
+El adaptador de correo de desarrollo (`DevEmailSender`) no es una entidad de base: escribe archivos `.eml` en `EMAIL_OUTBOX_DIR` detrás del puerto `service.EmailSender`. El resto del modelo (historia clínica, hospitalización, farmacia, facturación) puede agregarse replicando el patrón: entidad en `service/entities`, puerto en `service/ports.go`, caso de uso en `service`, almacén en `repository/postgres` y handler en `transport/http`.
 
 ## Reglas de negocio implementadas
 
@@ -715,6 +893,12 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 12. Cada access token incluye la versión de sesión (`ver`); si no coincide con `usuarios.token_version`, se rechaza aunque la firma sea válida.
 13. Las actualizaciones concurrentes de especialidades, pacientes, médicos, citas y usuarios se detectan con `version`; la segunda escritura devuelve `409` y no sobrescribe la primera.
 14. El contador de intentos fallidos, la rotación de refresh tokens y la revocación de sesiones se ejecutan con transacciones y bloqueos de fila para que dos solicitudes simultáneas no se pisen.
+15. El registro público valida username, email, documento, edad mínima configurable, política de contraseña y la versión vigente de términos antes de escribir.
+16. Una cuenta formada solo por el rol `paciente` requiere `email_verificado_en` para login y refresh. Las cuentas internas existentes quedan exentas.
+17. Los tokens de verificación y reset se guardan hasheados, vencen y son de un solo uso. Reenviar un enlace invalida el anterior del mismo tipo.
+18. El reset de contraseña verifica el email si faltaba, limpia el bloqueo, incrementa `token_version` y revoca todos los refresh tokens en la misma transacción.
+19. Si el documento ya existe como paciente sin cuenta, el registro crea una `solicitud_vinculacion`; no crea persona ni paciente nuevos. La aprobación vincula la cuenta en una transacción y el rechazo desactiva la cuenta pendiente.
+20. Una cuenta y una historia clínica tienen como máximo un vínculo activo. La cuenta de médico se crea por administración y se vincula con un perfil existente mediante un permiso administrativo.
 
 ## Seguridad implementada
 
@@ -722,7 +906,12 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - **JWT:** HS256, secreto de al menos 32 caracteres, emisor validado, expiración obligatoria y algoritmo restringido.
 - **Tokens:** access token de 15 minutos; refresh token de 7 días, rotativo, almacenado como hash y con detección de reutilización. La rotación consume el token anterior y crea el nuevo en una sola transacción.
 - **Fuerza bruta:** bloqueo de cuenta tras 5 intentos fallidos durante 15 minutos; el contador se incrementa de forma atómica en PostgreSQL y el límite de 30 solicitudes de login por minuto e IP se aplica en memoria por instancia.
-- **Enumeración de usuarios:** misma respuesta para usuario inexistente o contraseña incorrecta; comparación bcrypt ficticia para igualar tiempos.
+- **Enumeración de usuarios:** misma respuesta para usuario inexistente o contraseña incorrecta; comparación bcrypt ficticia para igualar tiempos. El reenvío de verificación y la solicitud de reset responden de forma genérica aunque el email no exista.
+- **Registro público:** rate limit por IP, validación de edad, términos, contraseña y documento, y transacción única para evitar historias huérfanas. La cuenta queda inutilizable para login hasta verificar el email.
+- **Tokens de cuenta:** verificación y reset se guardan solo como SHA-256, con expiración y `usado_en`; el consumo es un `UPDATE ... WHERE usado_en IS NULL AND expira_en > $2 RETURNING`, por lo que dos solicitudes simultáneas no pueden usar el mismo token. Los intentos con token inválido/vencido se auditan sin asociarlos a una cuenta y están sujetos al rate limit.
+- **Recuperación:** el reset incrementa `token_version`, revoca refresh tokens y limpia bloqueos; los access tokens anteriores dejan de ser válidos de inmediato.
+- **Vinculación:** una historia existente no se duplica; la aprobación valida paciente, cuenta y solicitud bajo bloqueo de fila. La aprobación/rechazo requiere `cuentas:vincular` y queda auditada.
+- **Correo de desarrollo:** escribe archivos `.eml` con permisos restrictivos y nunca registra el token; el enlace solo está en el buzón local. No uses `EMAIL_PROVIDER=outbox` en producción.
 - **RBAC:** permisos por recurso y acción, verificados en el middleware antes de llegar al handler.
 - **Auditoría:** logins, bloqueos, refresh, cambios de contraseña, escrituras y accesos denegados.
 - **Datos en tránsito y caché:** `Cache-Control: no-store`, `Pragma: no-cache`, CSP, `X-Frame-Options: DENY`, `nosniff` y política de permisos restrictiva.
@@ -730,7 +919,7 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - **Secretos:** `.env` está en `.gitignore`; usa `.env.example` como plantilla.
 - **Sesiones:** al desactivar una cuenta, cambiar roles, cambiar contraseña o llamar a `revocar-sesiones` se incrementa `token_version`; el access token anterior falla de inmediato y los refresh tokens quedan revocados.
 - **Observabilidad:** logs JSON, W3C `traceparent`/`X-Request-ID`, `trace_id` en auditoría, tabla `errores_aplicacion` con `instancia`, retención automática y endpoints restringidos `GET /errores` y `GET /auditoria`.
-- **Concurrencia:** restricciones de exclusión para agenda, versiones optimistas para escrituras, transacciones para participantes y bloqueos de fila para autenticación; los conflictos de concurrencia se devuelven como `409` reintentables.
+- **Concurrencia:** restricciones de exclusión para citas, horarios recurrentes y bloqueos de agenda; versiones optimistas para escrituras, transacciones para participantes y bloqueos de fila para autenticación; los conflictos de concurrencia se devuelven como `409` reintentables.
 
 ### Límites y recomendaciones para producción
 
@@ -738,9 +927,12 @@ El resto del modelo (historia clínica, hospitalización, farmacia, facturación
 - La API no implementa TLS por sí misma: publícala detrás de un reverse proxy con HTTPS.
 - Para desarrollo se usa el usuario `postgres`. En producción crea un rol de base de datos con privilegios mínimos (solo DML sobre las tablas necesarias) y no uses superusuario.
 - No hay CORS configurado. Si la API se consume desde un frontend en otro origen, agrega un middleware con una lista blanca de orígenes.
-- No hay MFA, recuperación de contraseña por correo ni cifrado de campos a nivel de aplicación. Evalúa `pgcrypto` o cifrado de disco según el marco regulatorio aplicable.
+- No hay MFA ni cifrado de campos a nivel de aplicación. Evalúa `pgcrypto` o cifrado de disco según el marco regulatorio aplicable.
+- La recuperación de contraseña usa un buzón local de desarrollo. Antes de producción implementa un proveedor real detrás de `service.EmailSender`, configura SPF/DKIM/DMARC y protege el buzón o la cola de envío.
+- El rate limiter de registro, verificación, reenvío, recuperación y reset también está en memoria y es por instancia; con varias réplicas usa un limitador compartido.
+- La aprobación de vinculación depende de que recepción valide la identidad por un canal aparte. El sistema evita duplicar la historia, pero no sustituye la verificación documental humana.
 - El solapamiento de agenda ya está garantizado en PostgreSQL con restricciones de exclusión para médico y paciente. Requiere la extensión `btree_gist` y que las citas históricas no tengan solapes al aplicar la migración `008`; usa `scripts/solapes_citas.sql` para revisarlas.
-- El rate limiter de login/refresh está en memoria y es por instancia. Si ejecutas varias réplicas, usa un limitador compartido (Redis, API gateway o WAF) para que el límite sea global.
+- El rate limiter de login/refresh, registro, verificación, reenvío, recuperación y reset está en memoria y es por instancia. Si ejecutas varias réplicas, usa un limitador compartido (Redis, API gateway o WAF) para que el límite sea global.
 - Los clientes deben serializar la renovación del refresh token. Un refresh concurrente con el mismo token se interpreta como reutilización y cierra todas las sesiones del usuario.
 - Las versiones optimistas hacen que dos escrituras simultáneas no se sobrescriban: el cliente que recibe `409` debe volver a consultar el recurso y reintentar con la versión actual.
 - La retención de `auditoria` y `errores_aplicacion` es automática; revisa sus valores antes de producción. Programa también la limpieza de `refresh_tokens` expirados. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.

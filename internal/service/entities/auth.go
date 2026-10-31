@@ -15,22 +15,46 @@ type Rol struct {
 
 // Usuario representa una cuenta de acceso al sistema.
 type Usuario struct {
-	ID               int64
-	Username         string
-	Email            string
-	PasswordHash     string
-	Nombres          string
-	Apellidos        string
-	Activo           bool
-	TokenVersion     int
-	IntentosFallidos int
-	BloqueadoHasta   *time.Time
-	UltimoAcceso     *time.Time
-	Roles            []string
-	Permisos         []string
-	Version          int64
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                  int64
+	Username            string
+	Email               string
+	PasswordHash        string
+	Nombres             string
+	Apellidos           string
+	Activo              bool
+	TokenVersion        int
+	IntentosFallidos    int
+	BloqueadoHasta      *time.Time
+	UltimoAcceso        *time.Time
+	EmailVerificadoEn   *time.Time
+	TerminosAceptadosEn *time.Time
+	VersionTerminos     string
+	DebeCambiarPassword bool
+	Roles               []string
+	Permisos            []string
+	Version             int64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+// EmailVerificado indica si la cuenta completó la verificación de email.
+func (u Usuario) EmailVerificado() bool {
+	return u.EmailVerificadoEn != nil
+}
+
+// RequiereVerificacionEmail indica si la cuenta es exclusivamente de paciente
+// y todavía no verificó su correo. Las cuentas internas existentes quedan
+// exentas para no bloquear el acceso administrativo durante la transición.
+func (u Usuario) RequiereVerificacionEmail() bool {
+	if u.EmailVerificado() || len(u.Roles) == 0 {
+		return false
+	}
+	for _, rol := range u.Roles {
+		if rol != "paciente" {
+			return false
+		}
+	}
+	return true
 }
 
 // RefreshToken representa un token de refresco almacenado de forma hasheada.

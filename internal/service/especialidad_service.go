@@ -19,16 +19,14 @@ func NewEspecialidadService(store EspecialidadStore) *EspecialidadService {
 }
 
 func (s *EspecialidadService) Crear(ctx context.Context, e entities.Especialidad) (*entities.Especialidad, error) {
-	e.Codigo = strings.ToUpper(strings.TrimSpace(e.Codigo))
-	e.Nombre = strings.TrimSpace(e.Nombre)
-	e.Descripcion = strings.TrimSpace(e.Descripcion)
-
-	if e.Codigo == "" {
-		return nil, entities.NewValidationError("codigo es obligatorio")
+	normalizarEspecialidad(&e)
+	if err := validarEspecialidad(e); err != nil {
+		return nil, err
 	}
-	if e.Nombre == "" {
-		return nil, entities.NewValidationError("nombre es obligatorio")
-	}
+	// Una especialidad nueva es activa y, por seguridad clínica, exige
+	// derivación hasta que administración la configure como acceso directo.
+	e.Activa = true
+	e.RequiereDerivacion = true
 	if err := s.store.Crear(ctx, &e); err != nil {
 		return nil, err
 	}
@@ -61,16 +59,18 @@ func (s *EspecialidadService) Actualizar(ctx context.Context, id int64, e entiti
 			"%w: la especialidad fue modificada por otra operación; vuelve a consultarla e inténtalo de nuevo",
 			entities.ErrConflict)
 	}
+	normalizarEspecialidad(&e)
 	e.ID = id
 	e.Version = actual.Version
-	e.Codigo = strings.ToUpper(strings.TrimSpace(e.Codigo))
-	e.Nombre = strings.TrimSpace(e.Nombre)
-	e.Descripcion = strings.TrimSpace(e.Descripcion)
-	if e.Codigo == "" {
-		return nil, entities.NewValidationError("codigo es obligatorio")
-	}
-	if e.Nombre == "" {
-		return nil, entities.NewValidationError("nombre es obligatorio")
+	// Los flags del catálogo todavía no se editan desde este endpoint.
+	// Se preservan para no desactivar o volver directa una especialidad por
+	// accidente al actualizar código, nombre o descripción.
+	e.Activa = actual.Activa
+	e.RequiereDerivacion = actual.RequiereDerivacion
+	e.Orden = actual.Orden
+	e.DuracionCitaMin = actual.DuracionCitaMin
+	if err := validarEspecialidad(e); err != nil {
+		return nil, err
 	}
 	if err := s.store.Actualizar(ctx, &e); err != nil {
 		return nil, err

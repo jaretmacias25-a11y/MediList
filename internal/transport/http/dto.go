@@ -137,6 +137,7 @@ func (r pacienteRequest) toEntity() (entities.Paciente, error) {
 
 type pacienteResponse struct {
 	ID                         int64           `json:"id"`
+	UsuarioID                  *int64          `json:"usuario_id,omitempty"`
 	Persona                    personaResponse `json:"persona"`
 	NumeroHistoria             string          `json:"numero_historia"`
 	GrupoSanguineo             string          `json:"grupo_sanguineo"`
@@ -152,6 +153,7 @@ type pacienteResponse struct {
 func nuevoPacienteResponse(p entities.Paciente) pacienteResponse {
 	return pacienteResponse{
 		ID:                         p.ID,
+		UsuarioID:                  p.UsuarioID,
 		Persona:                    nuevaPersonaResponse(p.Persona),
 		NumeroHistoria:             p.NumeroHistoria,
 		GrupoSanguineo:             p.GrupoSanguineo,
@@ -193,6 +195,7 @@ func (r medicoRequest) toEntity() (entities.Medico, error) {
 
 type medicoResponse struct {
 	ID              int64                `json:"id"`
+	UsuarioID       *int64               `json:"usuario_id,omitempty"`
 	Persona         personaResponse      `json:"persona"`
 	Especialidad    especialidadResponse `json:"especialidad"`
 	NumeroLicencia  string               `json:"numero_licencia"`
@@ -206,6 +209,7 @@ type medicoResponse struct {
 func nuevoMedicoResponse(m entities.Medico) medicoResponse {
 	return medicoResponse{
 		ID:              m.ID,
+		UsuarioID:       m.UsuarioID,
 		Persona:         nuevaPersonaResponse(m.Persona),
 		Especialidad:    nuevaEspecialidadResponse(m.Especialidad),
 		NumeroLicencia:  m.NumeroLicencia,

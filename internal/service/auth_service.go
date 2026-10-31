@@ -135,6 +135,14 @@ func (s *AuthService) Login(ctx context.Context, username, password, ip, userAge
 		return nil, credencialesInvalidas()
 	}
 
+	// Solo las cuentas exclusivamente de paciente exigen verificación. Las
+	// cuentas internas creadas antes de la Fase 2 quedan exentas.
+	if usuario.RequiereVerificacionEmail() {
+		s.auditar(ctx, usuario, usuario.Username, "login_email_no_verificado",
+			ip, userAgent, auditStatusForbidden)
+		return nil, fmt.Errorf("%w: verifica tu correo antes de iniciar sesión", entities.ErrEmailNoVerificado)
+	}
+
 	if err := s.usuarios.RegistrarLoginExitoso(ctx, usuario.ID); err != nil {
 		return nil, err
 	}
@@ -184,6 +192,12 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, userAgent s
 	if !usuario.Activo {
 		_ = s.refresh.Revocar(ctx, rt.ID)
 		return nil, fmt.Errorf("%w: usuario inactivo", entities.ErrUnauthorized)
+	}
+	if usuario.RequiereVerificacionEmail() {
+		_ = s.refresh.Revocar(ctx, rt.ID)
+		s.auditar(ctx, usuario, usuario.Username, "refresh_email_no_verificado",
+			ip, userAgent, auditStatusForbidden)
+		return nil, fmt.Errorf("%w: verifica tu correo antes de continuar", entities.ErrEmailNoVerificado)
 	}
 
 	sesion, err := s.rotarSesion(ctx, usuario, rt, ip, userAgent)
@@ -366,6 +380,9 @@ func (s *AuthService) rotarSesion(
 }
 
 func (s *AuthService) auditar(ctx context.Context, usuario *entities.Usuario, username, accion, ip, userAgent string, estado int) {
+	if s.auditoria == nil {
+		return
+	}
 	var usuarioID *int64
 	if usuario != nil {
 		id := usuario.ID

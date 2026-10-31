@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"medilist/internal/config"
+	"medilist/internal/notificaciones"
 	"medilist/internal/observability"
 	"medilist/internal/repository/postgres"
 	"medilist/internal/service"
@@ -84,6 +85,18 @@ func main() {
 	refreshTokenStore := postgres.NewRefreshTokenStore(pool)
 	auditoriaStore := postgres.NewAuditoriaStore(pool)
 	errorStore := postgres.NewErrorStore(pool)
+	cuentaStore := postgres.NewCuentaStore(pool)
+
+	emailSender, err := notificaciones.NewDevEmailSender(
+		cfg.EmailOutboxDir, cfg.EmailFrom, logger,
+	)
+	if err != nil {
+		logger.Error("no se pudo inicializar el buzón de correo", "error", err)
+		os.Exit(1)
+	}
+	if cfg.Env == "production" {
+		logger.Warn("EMAIL_PROVIDER=outbox es solo para desarrollo; configura un proveedor real antes de producción")
+	}
 
 	// Servicios (lógica de negocio)
 	especialidadService := service.NewEspecialidadService(especialidadStore)
@@ -101,6 +114,14 @@ func main() {
 		LockoutDuration:  cfg.LockoutDuration,
 	}, usuarioStore, refreshTokenStore, auditoriaStore)
 	usuarioService := service.NewUsuarioService(usuarioStore, rolStore, cfg.BcryptCost)
+	cuentaService := service.NewCuentaService(service.CuentaConfig{
+		TermsVersion:    cfg.TermsVersion,
+		MinEdadCuenta:   cfg.MinEdadCuenta,
+		BcryptCost:      cfg.BcryptCost,
+		VerificationTTL: cfg.EmailVerificationTTL,
+		ResetTTL:        cfg.PasswordResetTTL,
+		LinkBaseURL:     cfg.EmailLinkBaseURL,
+	}, cuentaStore, pacienteStore, usuarioStore, emailSender, auditoriaStore, logger)
 	auditoriaService := service.NewAuditoriaService(auditoriaStore)
 	errorService := service.NewErrorService(errorStore, cfg.ServiceName, cfg.InstanceID, logger)
 	retentionService := service.NewRetentionService(
@@ -124,6 +145,7 @@ func main() {
 		Citas:          citaService,
 		Auth:           authService,
 		Usuarios:       usuarioService,
+		Cuentas:        cuentaService,
 		Auditoria:      auditoriaService,
 		AuditoriaStore: auditoriaStore,
 		Errores:        errorService,

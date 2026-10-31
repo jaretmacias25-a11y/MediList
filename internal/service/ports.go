@@ -20,8 +20,10 @@ type EspecialidadStore interface {
 type PacienteStore interface {
 	Crear(ctx context.Context, p *entities.Paciente) error
 	ObtenerPorID(ctx context.Context, id int64) (*entities.Paciente, error)
+	BuscarPorDocumento(ctx context.Context, tipoDocumento, numeroDocumento string) (*entities.Paciente, error)
 	Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Paciente, error)
 	Actualizar(ctx context.Context, p *entities.Paciente) error
+	VincularUsuario(ctx context.Context, pacienteID, usuarioID int64) error
 	Eliminar(ctx context.Context, id int64) error
 }
 
@@ -31,6 +33,7 @@ type MedicoStore interface {
 	ObtenerPorID(ctx context.Context, id int64) (*entities.Medico, error)
 	Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Medico, error)
 	Actualizar(ctx context.Context, m *entities.Medico) error
+	VincularUsuario(ctx context.Context, medicoID, usuarioID int64) error
 	Eliminar(ctx context.Context, id int64) error
 }
 
@@ -47,10 +50,14 @@ type CitaStore interface {
 // UsuarioStore es el puerto de persistencia de usuarios y sus roles.
 type UsuarioStore interface {
 	BuscarPorUsername(ctx context.Context, username string) (*entities.Usuario, error)
+	BuscarPorEmail(ctx context.Context, email string) (*entities.Usuario, error)
 	ObtenerPorID(ctx context.Context, id int64) (*entities.Usuario, error)
 	Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Usuario, error)
 	Crear(ctx context.Context, u *entities.Usuario) error
 	Actualizar(ctx context.Context, u *entities.Usuario, passwordHash string, revocarSesiones bool) error
+	MarcarEmailVerificado(ctx context.Context, id int64, cuando time.Time) error
+	RegistrarAceptacionTerminos(ctx context.Context, id int64, versionTerminos string, cuando time.Time) error
+	EstablecerDebeCambiarPassword(ctx context.Context, id int64, valor bool) error
 	RegistrarLoginExitoso(ctx context.Context, id int64) error
 	RegistrarIntentoFallido(ctx context.Context, id int64, maxIntentos int, bloqueo time.Duration) (int, *time.Time, error)
 	RevocarSesiones(ctx context.Context, usuarioID int64) error
@@ -77,6 +84,70 @@ type RefreshTokenStore interface {
 type AuditoriaStore interface {
 	Registrar(ctx context.Context, a *entities.Auditoria) error
 	Listar(ctx context.Context, filtro entities.AuditoriaFiltro) ([]entities.Auditoria, error)
+}
+
+// CuentaStore concentra las operaciones transaccionales de cuentas de
+// paciente, tokens de un solo uso y vinculaciones con perfiles existentes.
+type CuentaStore interface {
+	RegistrarPacienteConCuenta(
+		ctx context.Context,
+		usuario *entities.Usuario,
+		paciente *entities.Paciente,
+		token *entities.TokenCuenta,
+		auditoria *entities.Auditoria,
+	) error
+	RegistrarCuentaPendienteVinculacion(
+		ctx context.Context,
+		usuario *entities.Usuario,
+		pacienteID int64,
+		token *entities.TokenCuenta,
+		solicitud *entities.SolicitudVinculacion,
+		auditoria *entities.Auditoria,
+	) error
+	ReemplazarToken(ctx context.Context, token *entities.TokenCuenta) error
+	VerificarEmail(
+		ctx context.Context,
+		tokenHash string,
+		cuando time.Time,
+		auditoria *entities.Auditoria,
+	) (*entities.Usuario, error)
+	RestablecerPassword(
+		ctx context.Context,
+		tokenHash, passwordHash string,
+		cuando time.Time,
+		auditoria *entities.Auditoria,
+	) (*entities.Usuario, error)
+	ListarSolicitudesVinculacion(
+		ctx context.Context,
+		filtro entities.SolicitudVinculacionFiltro,
+	) ([]entities.SolicitudVinculacion, error)
+	AprobarSolicitudVinculacion(
+		ctx context.Context,
+		solicitudID, actorID int64,
+		cuando time.Time,
+	) (*entities.SolicitudVinculacion, error)
+	RechazarSolicitudVinculacion(
+		ctx context.Context,
+		solicitudID, actorID int64,
+		motivo string,
+		cuando time.Time,
+	) (*entities.SolicitudVinculacion, error)
+	VincularPaciente(
+		ctx context.Context,
+		pacienteID, usuarioID int64,
+		solicitudID *int64,
+		actorID int64,
+		cuando time.Time,
+	) error
+	VincularMedico(ctx context.Context, medicoID, usuarioID int64, cuando time.Time) error
+}
+
+// EmailSender es el puerto de notificaciones de cuenta. El adaptador de
+// desarrollo escribe en un buzón local; un proveedor real puede implementar la
+// misma interfaz sin cambiar la lógica de registro.
+type EmailSender interface {
+	EnviarVerificacion(ctx context.Context, destino, nombre, enlace string, expira time.Time) error
+	EnviarResetPassword(ctx context.Context, destino, nombre, enlace string, expira time.Time) error
 }
 
 // ErrorStore es el puerto de registro y consulta de errores agregados.

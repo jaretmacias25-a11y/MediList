@@ -48,20 +48,25 @@ func nuevaSesionResponse(s service.Sesion) sesionResponse {
 // ---------------------------------------------------------------------------
 
 type usuarioResponse struct {
-	ID               int64      `json:"id"`
-	Username         string     `json:"username"`
-	Email            string     `json:"email"`
-	Nombres          string     `json:"nombres"`
-	Apellidos        string     `json:"apellidos"`
-	Activo           bool       `json:"activo"`
-	IntentosFallidos int        `json:"intentos_fallidos"`
-	BloqueadoHasta   *time.Time `json:"bloqueado_hasta,omitempty"`
-	UltimoAcceso     *time.Time `json:"ultimo_acceso,omitempty"`
-	Roles            []string   `json:"roles"`
-	Permisos         []string   `json:"permisos"`
-	Version          int64      `json:"version"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID                  int64      `json:"id"`
+	Username            string     `json:"username"`
+	Email               string     `json:"email"`
+	Nombres             string     `json:"nombres"`
+	Apellidos           string     `json:"apellidos"`
+	Activo              bool       `json:"activo"`
+	IntentosFallidos    int        `json:"intentos_fallidos"`
+	BloqueadoHasta      *time.Time `json:"bloqueado_hasta,omitempty"`
+	UltimoAcceso        *time.Time `json:"ultimo_acceso,omitempty"`
+	EmailVerificado     bool       `json:"email_verificado"`
+	EmailVerificadoEn   *time.Time `json:"email_verificado_en,omitempty"`
+	TerminosAceptadosEn *time.Time `json:"terminos_aceptados_en,omitempty"`
+	VersionTerminos     string     `json:"version_terminos,omitempty"`
+	DebeCambiarPassword bool       `json:"debe_cambiar_password"`
+	Roles               []string   `json:"roles"`
+	Permisos            []string   `json:"permisos"`
+	Version             int64      `json:"version"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 func nuevoUsuarioResponse(u entities.Usuario) usuarioResponse {
@@ -74,20 +79,25 @@ func nuevoUsuarioResponse(u entities.Usuario) usuarioResponse {
 		permisos = []string{}
 	}
 	return usuarioResponse{
-		ID:               u.ID,
-		Username:         u.Username,
-		Email:            u.Email,
-		Nombres:          u.Nombres,
-		Apellidos:        u.Apellidos,
-		Activo:           u.Activo,
-		IntentosFallidos: u.IntentosFallidos,
-		BloqueadoHasta:   u.BloqueadoHasta,
-		UltimoAcceso:     u.UltimoAcceso,
-		Roles:            roles,
-		Permisos:         permisos,
-		Version:          u.Version,
-		CreatedAt:        u.CreatedAt,
-		UpdatedAt:        u.UpdatedAt,
+		ID:                  u.ID,
+		Username:            u.Username,
+		Email:               u.Email,
+		Nombres:             u.Nombres,
+		Apellidos:           u.Apellidos,
+		Activo:              u.Activo,
+		IntentosFallidos:    u.IntentosFallidos,
+		BloqueadoHasta:      u.BloqueadoHasta,
+		UltimoAcceso:        u.UltimoAcceso,
+		EmailVerificado:     u.EmailVerificado(),
+		EmailVerificadoEn:   u.EmailVerificadoEn,
+		TerminosAceptadosEn: u.TerminosAceptadosEn,
+		VersionTerminos:     u.VersionTerminos,
+		DebeCambiarPassword: u.DebeCambiarPassword,
+		Roles:               roles,
+		Permisos:            permisos,
+		Version:             u.Version,
+		CreatedAt:           u.CreatedAt,
+		UpdatedAt:           u.UpdatedAt,
 	}
 }
 

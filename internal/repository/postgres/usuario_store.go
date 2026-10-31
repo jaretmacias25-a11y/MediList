@@ -27,7 +27,8 @@ const usuarioSelect = `
 	SELECT
 		u.id, u.username, u.email, u.password_hash, u.nombres, u.apellidos,
 		u.activo, u.token_version, u.intentos_fallidos, u.bloqueado_hasta, u.ultimo_acceso,
-		u.version, u.created_at, u.updated_at,
+		u.email_verificado_en, u.terminos_aceptados_en, u.version_terminos,
+		u.debe_cambiar_password, u.version, u.created_at, u.updated_at,
 		COALESCE(array_agg(DISTINCT r.codigo) FILTER (WHERE r.codigo IS NOT NULL), '{}') AS roles,
 		COALESCE(array_agg(DISTINCT p.codigo) FILTER (WHERE p.codigo IS NOT NULL), '{}') AS permisos
 	FROM usuarios u
@@ -41,6 +42,20 @@ func (s *UsuarioStore) BuscarPorUsername(ctx context.Context, username string) (
 		WHERE LOWER(u.username) = LOWER($1) OR LOWER(u.email) = LOWER($1)
 		GROUP BY u.id`
 	u, err := scanUsuario(s.db.QueryRow(ctx, q, username))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: usuario no encontrado", entities.ErrNotFound)
+	}
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return u, nil
+}
+
+func (s *UsuarioStore) BuscarPorEmail(ctx context.Context, email string) (*entities.Usuario, error) {
+	q := usuarioSelect + `
+		WHERE LOWER(u.email) = LOWER($1)
+		GROUP BY u.id`
+	u, err := scanUsuario(s.db.QueryRow(ctx, q, email))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w: usuario no encontrado", entities.ErrNotFound)
 	}
@@ -100,11 +115,17 @@ func (s *UsuarioStore) Crear(ctx context.Context, u *entities.Usuario) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	const insertUsuario = `
-		INSERT INTO usuarios (username, email, password_hash, nombres, apellidos, activo)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO usuarios (
+			username, email, password_hash, nombres, apellidos, activo,
+			email_verificado_en, terminos_aceptados_en, version_terminos,
+			debe_cambiar_password
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, version, created_at, updated_at`
 	err = tx.QueryRow(ctx, insertUsuario,
 		u.Username, u.Email, u.PasswordHash, u.Nombres, u.Apellidos, u.Activo,
+		u.EmailVerificadoEn, u.TerminosAceptadosEn, u.VersionTerminos,
+		u.DebeCambiarPassword,
 	).Scan(&u.ID, &u.Version, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return mapError(err)
@@ -159,6 +180,61 @@ func (s *UsuarioStore) Actualizar(ctx context.Context, u *entities.Usuario, pass
 		}
 	}
 	return mapError(tx.Commit(ctx))
+}
+
+// MarcarEmailVerificado registra la verificación sin sobrescribir una fecha
+// anterior. Es idempotente para tolerar reintentos del flujo de verificación.
+func (s *UsuarioStore) MarcarEmailVerificado(ctx context.Context, id int64, cuando time.Time) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE usuarios
+		SET email_verificado_en = COALESCE(email_verificado_en, $2),
+			version = version + 1
+		WHERE id = $1`, id, cuando)
+	if err != nil {
+		return mapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return noEncontrado("usuario", id)
+	}
+	return nil
+}
+
+// RegistrarAceptacionTerminos guarda la versión de términos aceptada.
+func (s *UsuarioStore) RegistrarAceptacionTerminos(
+	ctx context.Context,
+	id int64,
+	versionTerminos string,
+	cuando time.Time,
+) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE usuarios
+		SET terminos_aceptados_en = $2,
+			version_terminos = $3,
+			version = version + 1
+		WHERE id = $1`, id, cuando, versionTerminos)
+	if err != nil {
+		return mapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return noEncontrado("usuario", id)
+	}
+	return nil
+}
+
+// EstablecerDebeCambiarPassword marca cuentas con contraseña temporal.
+func (s *UsuarioStore) EstablecerDebeCambiarPassword(ctx context.Context, id int64, valor bool) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE usuarios
+		SET debe_cambiar_password = $2,
+			version = version + 1
+		WHERE id = $1`, id, valor)
+	if err != nil {
+		return mapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return noEncontrado("usuario", id)
+	}
+	return nil
 }
 
 func asignarRoles(ctx context.Context, tx pgx.Tx, usuarioID int64, roles []string) error {
@@ -294,10 +370,13 @@ func (s *UsuarioStore) Desbloquear(ctx context.Context, id int64) error {
 func scanUsuario(row rowScanner) (*entities.Usuario, error) {
 	var u entities.Usuario
 	var bloqueadoHasta, ultimoAcceso pgtype.Timestamptz
+	var emailVerificado, terminosAceptados pgtype.Timestamptz
 	err := row.Scan(
 		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Nombres, &u.Apellidos,
 		&u.Activo, &u.TokenVersion, &u.IntentosFallidos, &bloqueadoHasta, &ultimoAcceso,
-		&u.Version, &u.CreatedAt, &u.UpdatedAt, &u.Roles, &u.Permisos,
+		&emailVerificado, &terminosAceptados, &u.VersionTerminos,
+		&u.DebeCambiarPassword, &u.Version, &u.CreatedAt, &u.UpdatedAt,
+		&u.Roles, &u.Permisos,
 	)
 	if err != nil {
 		return nil, err
@@ -309,6 +388,14 @@ func scanUsuario(row rowScanner) (*entities.Usuario, error) {
 	if ultimoAcceso.Valid {
 		t := ultimoAcceso.Time
 		u.UltimoAcceso = &t
+	}
+	if emailVerificado.Valid {
+		t := emailVerificado.Time
+		u.EmailVerificadoEn = &t
+	}
+	if terminosAceptados.Valid {
+		t := terminosAceptados.Time
+		u.TerminosAceptadosEn = &t
 	}
 	return &u, nil
 }

@@ -29,6 +29,15 @@ func configValidaParaPruebas() Config {
 		RetentionInterval: 24 * time.Hour,
 		ErrorRetention:    90 * 24 * time.Hour,
 		AuditRetention:    365 * 24 * time.Hour,
+
+		EmailProvider:        "outbox",
+		EmailFrom:            "MediList <no-reply@medilist.local>",
+		EmailOutboxDir:       "outbox/emails",
+		EmailLinkBaseURL:     "http://localhost:3000",
+		EmailVerificationTTL: 24 * time.Hour,
+		PasswordResetTTL:     time.Hour,
+		TermsVersion:         "2026-10",
+		MinEdadCuenta:        18,
 	}
 }
 
@@ -82,6 +91,26 @@ func TestValidateExigeJSONEnProduccion(t *testing.T) {
 	cfg.LogFormat = "json"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("la configuración JSON debería ser válida: %v", err)
+	}
+}
+
+func TestValidateConfiguracionDeCuentas(t *testing.T) {
+	cfg := configValidaParaPruebas()
+	cfg.EmailLinkBaseURL = "localhost:3000"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("el enlace de correo debe ser una URL absoluta")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.PasswordResetTTL = 25 * time.Hour
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("PASSWORD_RESET_MINUTES fuera de rango debe rechazarse")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.MinEdadCuenta = 130
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("MIN_EDAD_CUENTA fuera de rango debe rechazarse")
 	}
 }
 

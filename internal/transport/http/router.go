@@ -19,6 +19,7 @@ type Dependencies struct {
 	Citas          *service.CitaService
 	Auth           *service.AuthService
 	Usuarios       *service.UsuarioService
+	Cuentas        *service.CuentaService
 	Auditoria      *service.AuditoriaService
 	AuditoriaStore service.AuditoriaStore
 	Errores        *service.ErrorService
@@ -40,6 +41,13 @@ func NewRouter(d Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/logout", ah.Logout)
 	mux.Handle("GET /api/v1/auth/me", auth.Require("", http.HandlerFunc(ah.Me)))
 	mux.Handle("POST /api/v1/auth/password", auth.Require("", http.HandlerFunc(ah.CambiarPassword)))
+
+	cuh := NewCuentaHandler(d.Cuentas, d.Logger)
+	mux.HandleFunc("POST /api/v1/auth/register", cuh.Registrar)
+	mux.HandleFunc("POST /api/v1/auth/verify-email", cuh.VerificarEmail)
+	mux.HandleFunc("POST /api/v1/auth/resend-verification", cuh.ReenviarVerificacion)
+	mux.HandleFunc("POST /api/v1/auth/forgot-password", cuh.SolicitarResetPassword)
+	mux.HandleFunc("POST /api/v1/auth/reset-password", cuh.RestablecerPassword)
 
 	protegido := func(pattern, permiso string, handler http.HandlerFunc) {
 		mux.Handle(pattern, auth.Require(permiso, handler))
@@ -87,10 +95,17 @@ func NewRouter(d Dependencies) http.Handler {
 	escritura("POST /api/v1/usuarios/{id}/desbloquear", "usuarios:escribir", uh.Desbloquear)
 	escritura("POST /api/v1/usuarios/{id}/revocar-sesiones", "usuarios:escribir", uh.RevocarSesiones)
 
+	escritura("POST /api/v1/cuentas/vinculaciones/{id}/aprobar", "cuentas:vincular", cuh.AprobarSolicitud)
+	escritura("POST /api/v1/cuentas/vinculaciones/{id}/rechazar", "cuentas:vincular", cuh.RechazarSolicitud)
+	escritura("POST /api/v1/cuentas/vincular-paciente", "cuentas:vincular", cuh.VincularPaciente)
+	escritura("POST /api/v1/cuentas/vincular-medico", "usuarios:escribir", cuh.VincularMedico)
+
 	consultaAuditada := func(pattern, permiso string, handler http.HandlerFunc) {
 		mux.Handle(pattern, auth.Require(permiso,
 			auditSensitiveReads(d.AuditoriaStore, d.Logger, handler)))
 	}
+
+	consultaAuditada("GET /api/v1/cuentas/vinculaciones", "cuentas:vincular", cuh.ListarSolicitudes)
 
 	audh := NewAuditoriaHandler(d.Auditoria, d.Logger)
 	consultaAuditada("GET /api/v1/auditoria", "auditoria:leer", audh.Listar)

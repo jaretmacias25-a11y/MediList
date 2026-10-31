@@ -39,6 +39,7 @@ func (s *MedicoService) Crear(ctx context.Context, m entities.Medico) (*entities
 		return nil, err
 	}
 	m.Activo = true
+	m.AceptaPortal = true
 	if err := s.store.Crear(ctx, &m); err != nil {
 		return nil, err
 	}
@@ -77,6 +78,13 @@ func (s *MedicoService) Actualizar(ctx context.Context, id int64, m entities.Med
 	m.Persona.ID = actual.Persona.ID
 	m.Activo = actual.Activo
 	m.Version = actual.Version
+	// La vinculación de cuenta y el perfil público se gestionan en flujos
+	// separados; este CRUD no debe borrarlos al actualizar datos personales.
+	m.UsuarioID = actual.UsuarioID
+	m.DuracionCitaMin = actual.DuracionCitaMin
+	m.Bio = actual.Bio
+	m.FotoURL = actual.FotoURL
+	m.AceptaPortal = actual.AceptaPortal
 	if err := validarMedico(m); err != nil {
 		return nil, err
 	}

@@ -26,12 +26,12 @@ Sistema de gestión para hospital / clínica.
 | Entidad | Propósito | Atributos clave |
 |---|---|---|
 | **Persona** | Datos de identidad comunes a pacientes y empleados | `id_persona` PK, `tipo_documento`, `numero_documento` UK, `nombres`, `apellidos`, `fecha_nacimiento`, `sexo`, `estado_civil`, `telefono`, `email`, `direccion`, `nacionalidad`, auditoría y borrado lógico |
-| **Paciente** | Perfil clínico-administrativo | `id_paciente` PK, `id_persona` FK UK, `numero_historia` UK, `grupo_sanguineo`, `factor_rh`, `contacto_emergencia_nombre`, `contacto_emergencia_telefono`, `fecha_registro`, `activo` |
+| **Paciente** | Perfil clínico-administrativo | `id_paciente` PK, `id_persona` FK UK, `usuario_id` FK UK (opcional), `numero_historia` UK, `grupo_sanguineo`, `factor_rh`, `contacto_emergencia_nombre`, `contacto_emergencia_telefono`, `fecha_registro`, `activo` |
 | **Empleado** | Vínculo laboral | `id_empleado` PK, `id_persona` FK UK, `codigo_empleado` UK, `id_servicio` FK, `cargo`, `fecha_ingreso`, `fecha_salida`, `tipo_contrato`, `estado` |
 | **ProfesionalSalud** | Empleado habilitado para actos clínicos | `id_profesional` PK, `id_empleado` FK UK, `tipo_profesional` (médico, enfermero, etc.), `numero_licencia` UK, `firma_digital`, `activo` |
 | **Especialidad** | Catálogo de especialidades | `id_especialidad` PK, `codigo` UK, `nombre`, `descripcion` |
 | **ProfesionalEspecialidad** | Relación N:M profesional–especialidad | `id_profesional` FK, `id_especialidad` FK, `principal`, `fecha_certificacion` (PK compuesta) |
-| **Usuario** | Credenciales de acceso | `id_usuario` PK, `id_persona` FK, `username` UK, `password_hash`, `email_verificado`, `ultimo_acceso`, `estado`, `token_version`, `mfa_habilitado` |
+| **Usuario** | Credenciales de acceso | `id_usuario` PK, `username` UK, `email` UK, `password_hash`, `email_verificado_en`, `terminos_aceptados_en`, `version_terminos`, `debe_cambiar_password`, `ultimo_acceso`, `activo`, `token_version`, `mfa_habilitado` |
 | **Rol / Permiso** | Control de acceso RBAC | `id_rol` PK, `nombre` UK, `descripcion`; `id_permiso` PK, `codigo` UK, `modulo`, `descripcion` |
 | **UsuarioRol / RolPermiso** | Asignaciones N:M con vigencia | claves FK compuestas, `vigente_desde`, `vigente_hasta` |
 
@@ -41,12 +41,14 @@ Esta versión implementa el núcleo de autenticación y autorización con las si
 
 | Tabla | Propósito | Atributos clave |
 |---|---|---|
-| `usuarios` | Cuenta de acceso | `id` PK, `username` UK, `email` UK, `password_hash`, `nombres`, `apellidos`, `activo`, `token_version`, `intentos_fallidos`, `bloqueado_hasta`, `ultimo_acceso` |
+| `usuarios` | Cuenta de acceso | `id` PK, `username` UK, `email` UK, `password_hash`, `nombres`, `apellidos`, `activo`, `email_verificado_en`, `terminos_aceptados_en`, `version_terminos`, `debe_cambiar_password`, `token_version`, `intentos_fallidos`, `bloqueado_hasta`, `ultimo_acceso` |
 | `roles` | Agrupación de permisos | `id` PK, `codigo` UK, `nombre`, `descripcion` |
 | `permisos` | Acción autorizable | `id` PK, `codigo` UK, `modulo`, `descripcion` |
 | `usuario_roles` | Asignación N:M usuario–rol | `usuario_id` FK, `rol_id` FK, PK compuesta |
 | `rol_permisos` | Asignación N:M rol–permiso | `rol_id` FK, `permiso_id` FK, PK compuesta |
-| `refresh_tokens` | Sesiones de renovación | `id` PK, `usuario_id` FK, `token_hash` UK, `expira_en`, `revocado_en`, `ip`, `user_agent` |
+| `refresh_tokens` | Sesiones de renovación | `id` PK, `usuario_id` FK, `token_hash` UK, `token_version`, `expira_en`, `revocado_en`, `ip`, `user_agent` |
+| `tokens_cuenta` | Tokens de verificación de email y reset | `id` PK, `usuario_id` FK, `tipo` (`verificacion_email`, `reset_password`), `token_hash` UK, `expira_en`, `usado_en`, `created_at` |
+| `solicitudes_vinculacion` | Vinculación de una cuenta con una historia existente | `id` PK, `usuario_id` FK, `paciente_id` FK, `estado` (`pendiente`, `aprobada`, `rechazada`), `motivo`, `resuelta_por_usuario_id` FK, `resuelta_en`, `created_at`, `updated_at` |
 | `auditoria` | Bitácora de seguridad | `id` PK, `usuario_id` FK, `username`, `accion`, `recurso`, `metodo`, `ruta`, `estado_http`, `ip`, `user_agent`, `trace_id`, `created_at` |
 | `errores_aplicacion` | Errores agregados para observabilidad | `id` PK, `trace_id`, `servicio`, `instancia`, `componente`, `nivel`, `metodo`, `ruta`, `estado_http`, `codigo`, `mensaje`, `usuario_id` FK, `username`, `ip`, `user_agent`, `stack_trace`, `created_at` |
 
@@ -63,6 +65,13 @@ Reglas de seguridad:
 9. Se auditan inicios de sesión, bloqueos, refresh, cambios de contraseña, escrituras, accesos denegados y consultas a los paneles de auditoría y errores.
 10. Los errores internos y pánicos se registran con `trace_id` y `instancia` en `errores_aplicacion` y en logs JSON; el mismo identificador se devuelve al cliente en `X-Request-ID` y `request_id`.
 11. La auditoría y los errores agregados comparten `trace_id`, lo que permite correlacionar un evento de seguridad con su fallo técnico. La retención se aplica automáticamente según la configuración.
+12. El registro público valida username, email, documento, edad mínima configurable, contraseña y versión vigente de términos.
+13. Una cuenta formada solo por el rol `paciente` requiere `email_verificado_en` para login y refresh; las cuentas internas existentes quedan exentas.
+14. Los tokens de `tokens_cuenta` se guardan como SHA-256, vencen y son de un solo uso. Reenviar un token invalida el anterior del mismo tipo.
+15. El reset de contraseña verifica el email si faltaba, limpia el bloqueo, incrementa `token_version` y revoca todos los refresh tokens en la misma transacción.
+16. Un documento existente sin cuenta no crea otra historia: genera una `solicitud_vinculacion`. La aprobación vincula la cuenta y el rechazo desactiva la cuenta pendiente.
+17. Una cuenta y una historia clínica tienen como máximo un vínculo activo. La cuenta de médico se crea por administración y se vincula a un perfil existente.
+18. Las cuentas de paciente se vinculan a `pacientes.usuario_id`; los médicos a `medicos.usuario_id`. Los endpoints de portal no aceptan esos IDs desde el cliente.
 
 ---
 
@@ -89,6 +98,20 @@ Reglas de seguridad:
 | **BloqueoAgenda** | Ausencias del profesional | `id_bloqueo` PK, `id_profesional` FK, `fecha_inicio`, `fecha_fin`, `motivo` |
 
 **Estados de la cita:** `programada → confirmada → atendida`, con salidas alternas `no_asistio`, `cancelada`, `reprogramada`.
+
+### 3.1 Implementación actual de agenda y derivaciones
+
+Las migraciones 008–011 materializan el modelo operativo de agenda:
+
+| Tabla | Propósito | Atributos clave |
+|---|---|---|
+| `citas` | Reserva y metadata operativa | `id`, `codigo`, `paciente_id`, `medico_id`, `fecha_hora_inicio`, `duracion_min`, `estado`, `version`, `derivacion_id`, `canal`, `creada_por_usuario_id`, `motivo_cancelacion` |
+| `horarios_profesional` | Plantilla semanal de disponibilidad | `medico_id`, `dia_semana`, `hora_inicio`, `hora_fin`, `duracion_slot_min`, vigencia, `activo`, `version` |
+| `bloqueos_agenda` | Ausencias y bloqueos puntuales | `medico_id`, `inicio`, `fin`, `motivo`, `creado_por` |
+| `derivaciones` | Autorización clínica para especialista | `paciente_id`, `medico_origen_id`, `cita_origen_id`, `especialidad_destino_id`, `medico_destino_id`, `motivo`, `prioridad`, `estado`, vigencia, `version` |
+| `notas_cita` | Nota mínima de la consulta | `cita_id` UK, `medico_id`, `motivo`, `evaluacion`, `plan`, `version` |
+
+La entidad conceptual **Derivacion** se implementa como `derivaciones`, con la cita de origen (`cita_origen_id`) como encuentro habilitante. Una derivación solo nace de una cita de Medicina General `atendida`, la especialidad destino debe exigir derivación y una misma derivación no puede sostener dos citas activas o atendidas.
 
 ---
 
@@ -215,3 +238,7 @@ erDiagram
 14. **Trazabilidad:** toda operación de escritura autenticada, todo intento de acceso denegado y toda consulta a los paneles de auditoría/errores queda en `auditoria` con su `trace_id`.
 15. **Revocación inmediata:** el claim `ver` del JWT debe coincidir con `usuarios.token_version`; cualquier cambio de rol, contraseña, estado o revocación explícita invalida los access tokens vigentes.
 16. **Observabilidad:** los errores internos se escriben simultáneamente en stdout JSON y en `errores_aplicacion`, correlacionados por `trace_id` e identificados por `instancia`; nunca incluyen contraseñas, tokens ni cuerpos de solicitud.
+17. **Una historia, una cuenta:** `pacientes.usuario_id` y `medicos.usuario_id` son únicos; el registro con documento existente no duplica persona ni paciente.
+18. **Verificación previa al portal:** una cuenta exclusivamente de paciente no inicia sesión hasta verificar el email. La verificación no sustituye la aprobación de la vinculación cuando la historia ya existía.
+19. **Tokens de cuenta de un solo uso:** verificación y reset se consumen con una actualización atómica; un token vencido o reutilizado devuelve `400`.
+20. **Reset seguro:** cambiar la contraseña por recuperación revoca refresh tokens e incrementa `token_version`; el access token anterior deja de funcionar de inmediato.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -41,6 +42,15 @@ type Config struct {
 	RetentionInterval time.Duration
 	ErrorRetention    time.Duration
 	AuditRetention    time.Duration
+
+	EmailProvider        string
+	EmailFrom            string
+	EmailOutboxDir       string
+	EmailLinkBaseURL     string
+	EmailVerificationTTL time.Duration
+	PasswordResetTTL     time.Duration
+	TermsVersion         string
+	MinEdadCuenta        int
 }
 
 // Load lee .env (sin sobrescribir variables del sistema) y las variables de entorno.
@@ -74,6 +84,15 @@ func Load() Config {
 		RetentionInterval: time.Duration(getenvInt("RETENTION_INTERVAL_HOURS", 24)) * time.Hour,
 		ErrorRetention:    time.Duration(getenvInt("ERROR_RETENTION_DAYS", 90)) * 24 * time.Hour,
 		AuditRetention:    time.Duration(getenvInt("AUDIT_RETENTION_DAYS", 365)) * 24 * time.Hour,
+
+		EmailProvider:        strings.ToLower(strings.TrimSpace(getenv("EMAIL_PROVIDER", "outbox"))),
+		EmailFrom:            strings.TrimSpace(getenv("EMAIL_FROM", "MediList <no-reply@medilist.local>")),
+		EmailOutboxDir:       strings.TrimSpace(getenv("EMAIL_OUTBOX_DIR", "outbox/emails")),
+		EmailLinkBaseURL:     strings.TrimSpace(getenv("EMAIL_LINK_BASE_URL", "http://localhost:3000")),
+		EmailVerificationTTL: time.Duration(getenvInt("EMAIL_VERIFICATION_HOURS", 24)) * time.Hour,
+		PasswordResetTTL:     time.Duration(getenvInt("PASSWORD_RESET_MINUTES", 60)) * time.Minute,
+		TermsVersion:         strings.TrimSpace(getenv("TERMS_VERSION", "2026-10")),
+		MinEdadCuenta:        getenvInt("MIN_EDAD_CUENTA", 18),
 	}
 }
 
@@ -158,6 +177,31 @@ func (c Config) Validate() error {
 	}
 	if c.LockoutDuration < time.Minute {
 		return fmt.Errorf("LOCK_MINUTES debe ser al menos 1")
+	}
+	if c.EmailProvider != "outbox" {
+		return fmt.Errorf("EMAIL_PROVIDER debe ser outbox; el proveedor real aún no está implementado")
+	}
+	if c.EmailFrom == "" || len(c.EmailFrom) > 200 {
+		return fmt.Errorf("EMAIL_FROM debe tener entre 1 y 200 caracteres")
+	}
+	if c.EmailOutboxDir == "" || len(c.EmailOutboxDir) > 260 {
+		return fmt.Errorf("EMAIL_OUTBOX_DIR debe tener entre 1 y 260 caracteres")
+	}
+	enlace, err := url.Parse(c.EmailLinkBaseURL)
+	if err != nil || enlace.Host == "" || (enlace.Scheme != "http" && enlace.Scheme != "https") {
+		return fmt.Errorf("EMAIL_LINK_BASE_URL debe ser una URL http(s) absoluta")
+	}
+	if c.EmailVerificationTTL < 15*time.Minute || c.EmailVerificationTTL > 30*24*time.Hour {
+		return fmt.Errorf("EMAIL_VERIFICATION_HOURS debe estar entre 1 y 720")
+	}
+	if c.PasswordResetTTL < 5*time.Minute || c.PasswordResetTTL > 24*time.Hour {
+		return fmt.Errorf("PASSWORD_RESET_MINUTES debe estar entre 5 y 1440")
+	}
+	if c.TermsVersion == "" || len(c.TermsVersion) > 20 {
+		return fmt.Errorf("TERMS_VERSION debe tener entre 1 y 20 caracteres")
+	}
+	if c.MinEdadCuenta < 0 || c.MinEdadCuenta > 120 {
+		return fmt.Errorf("MIN_EDAD_CUENTA debe estar entre 0 y 120")
 	}
 	return nil
 }

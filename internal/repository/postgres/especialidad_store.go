@@ -20,21 +20,28 @@ func NewEspecialidadStore(db *pgxpool.Pool) *EspecialidadStore {
 	return &EspecialidadStore{db: db}
 }
 
+const especialidadSelect = `
+	SELECT
+		id, codigo, nombre, descripcion,
+		requiere_derivacion, activa, orden, duracion_cita_min,
+		version, created_at, updated_at
+	FROM especialidades`
+
 func (s *EspecialidadStore) Crear(ctx context.Context, e *entities.Especialidad) error {
 	const q = `
-		INSERT INTO especialidades (codigo, nombre, descripcion)
-		VALUES ($1, $2, $3)
+		INSERT INTO especialidades
+			(codigo, nombre, descripcion, requiere_derivacion, activa, orden, duracion_cita_min)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, version, created_at, updated_at`
-	err := s.db.QueryRow(ctx, q, e.Codigo, e.Nombre, e.Descripcion).
-		Scan(&e.ID, &e.Version, &e.CreatedAt, &e.UpdatedAt)
+	err := s.db.QueryRow(ctx, q,
+		e.Codigo, e.Nombre, e.Descripcion, e.RequiereDerivacion,
+		e.Activa, e.Orden, e.DuracionCitaMin,
+	).Scan(&e.ID, &e.Version, &e.CreatedAt, &e.UpdatedAt)
 	return mapError(err)
 }
 
 func (s *EspecialidadStore) ObtenerPorID(ctx context.Context, id int64) (*entities.Especialidad, error) {
-	const q = `
-		SELECT id, codigo, nombre, descripcion, version, created_at, updated_at
-		FROM especialidades
-		WHERE id = $1`
+	q := especialidadSelect + ` WHERE id = $1`
 	e, err := scanEspecialidad(s.db.QueryRow(ctx, q, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, noEncontrado("especialidad", id)
@@ -46,9 +53,7 @@ func (s *EspecialidadStore) ObtenerPorID(ctx context.Context, id int64) (*entiti
 }
 
 func (s *EspecialidadStore) Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Especialidad, error) {
-	const q = `
-		SELECT id, codigo, nombre, descripcion, version, created_at, updated_at
-		FROM especialidades
+	q := especialidadSelect + `
 		WHERE ($1 = '' OR codigo ILIKE '%' || $1 || '%' OR nombre ILIKE '%' || $1 || '%')
 		ORDER BY nombre ASC
 		LIMIT $2 OFFSET $3`
@@ -75,9 +80,14 @@ func (s *EspecialidadStore) Actualizar(ctx context.Context, e *entities.Especial
 		SET codigo = $2,
 			nombre = $3,
 			descripcion = $4,
+			requiere_derivacion = $5,
+			activa = $6,
+			orden = $7,
+			duracion_cita_min = $8,
 			version = version + 1
-		WHERE id = $1 AND version = $5`
-	tag, err := s.db.Exec(ctx, q, e.ID, e.Codigo, e.Nombre, e.Descripcion, e.Version)
+		WHERE id = $1 AND version = $9`
+	tag, err := s.db.Exec(ctx, q, e.ID, e.Codigo, e.Nombre, e.Descripcion,
+		e.RequiereDerivacion, e.Activa, e.Orden, e.DuracionCitaMin, e.Version)
 	if err != nil {
 		return mapError(err)
 	}
@@ -100,7 +110,11 @@ func (s *EspecialidadStore) Eliminar(ctx context.Context, id int64) error {
 
 func scanEspecialidad(row rowScanner) (*entities.Especialidad, error) {
 	var e entities.Especialidad
-	err := row.Scan(&e.ID, &e.Codigo, &e.Nombre, &e.Descripcion, &e.Version, &e.CreatedAt, &e.UpdatedAt)
+	err := row.Scan(
+		&e.ID, &e.Codigo, &e.Nombre, &e.Descripcion,
+		&e.RequiereDerivacion, &e.Activa, &e.Orden, &e.DuracionCitaMin,
+		&e.Version, &e.CreatedAt, &e.UpdatedAt,
+	)
 	if err != nil {
 		return nil, err
 	}

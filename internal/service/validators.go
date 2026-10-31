@@ -80,6 +80,11 @@ func normalizarMedico(m *entities.Medico) {
 	if m.TipoProfesional == "" {
 		m.TipoProfesional = "medico"
 	}
+	m.Bio = strings.TrimSpace(m.Bio)
+	m.FotoURL = strings.TrimSpace(m.FotoURL)
+	if m.DuracionCitaMin == 0 {
+		m.DuracionCitaMin = 30
+	}
 }
 
 func validarMedico(m entities.Medico) error {
@@ -91,6 +96,34 @@ func validarMedico(m entities.Medico) error {
 	}
 	if m.NumeroLicencia == "" {
 		return entities.NewValidationError("numero_licencia es obligatorio")
+	}
+	if m.DuracionCitaMin < 5 || m.DuracionCitaMin > 240 {
+		return entities.NewValidationError("duracion_cita_min debe estar entre 5 y 240 minutos")
+	}
+	return nil
+}
+
+func normalizarEspecialidad(e *entities.Especialidad) {
+	e.Codigo = strings.ToUpper(strings.TrimSpace(e.Codigo))
+	e.Nombre = strings.TrimSpace(e.Nombre)
+	e.Descripcion = strings.TrimSpace(e.Descripcion)
+	if e.DuracionCitaMin == 0 {
+		e.DuracionCitaMin = 30
+	}
+}
+
+func validarEspecialidad(e entities.Especialidad) error {
+	if e.Codigo == "" {
+		return entities.NewValidationError("codigo es obligatorio")
+	}
+	if e.Nombre == "" {
+		return entities.NewValidationError("nombre es obligatorio")
+	}
+	if e.Orden < 0 {
+		return entities.NewValidationError("orden no puede ser negativo")
+	}
+	if e.DuracionCitaMin < 5 || e.DuracionCitaMin > 240 {
+		return entities.NewValidationError("duracion_cita_min debe estar entre 5 y 240 minutos")
 	}
 	return nil
 }

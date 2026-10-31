@@ -18,6 +18,8 @@ var (
 	ErrForbidden = errors.New("acceso denegado")
 	// ErrLocked indica una cuenta bloqueada temporalmente.
 	ErrLocked = errors.New("cuenta bloqueada temporalmente")
+	// ErrEmailNoVerificado indica que la cuenta debe verificar su correo.
+	ErrEmailNoVerificado = errors.New("email no verificado")
 	// ErrRateLimited indica demasiadas solicitudes en poco tiempo.
 	ErrRateLimited = errors.New("demasiadas solicitudes")
 )

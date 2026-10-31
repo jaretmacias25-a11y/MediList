@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"medilist/internal/service/entities"
@@ -22,11 +23,14 @@ func NewMedicoStore(db *pgxpool.Pool) *MedicoStore {
 
 const medicoSelect = `
 	SELECT
-		m.id, m.especialidad_id, m.numero_licencia, m.tipo_profesional,
+		m.id, m.usuario_id, m.especialidad_id, m.numero_licencia, m.tipo_profesional,
+		m.duracion_cita_min, m.bio, m.foto_url, m.acepta_portal,
 		m.activo, m.version, m.created_at, m.updated_at,
 		pe.id, pe.tipo_documento, pe.numero_documento, pe.nombres, pe.apellidos,
 		pe.fecha_nacimiento, pe.sexo, pe.telefono, pe.email, pe.direccion,
-		e.id, e.codigo, e.nombre, e.descripcion, e.created_at, e.updated_at
+		e.id, e.codigo, e.nombre, e.descripcion,
+		e.requiere_derivacion, e.activa, e.orden, e.duracion_cita_min,
+		e.version, e.created_at, e.updated_at
 	FROM medicos m
 	JOIN personas pe ON pe.id = m.persona_id
 	JOIN especialidades e ON e.id = m.especialidad_id`
@@ -55,11 +59,13 @@ func (s *MedicoStore) Crear(ctx context.Context, m *entities.Medico) error {
 
 	const insertMedico = `
 		INSERT INTO medicos
-			(persona_id, especialidad_id, numero_licencia, tipo_profesional, activo)
-		VALUES ($1, $2, $3, $4, $5)
+			(persona_id, usuario_id, especialidad_id, numero_licencia,
+			 tipo_profesional, duracion_cita_min, bio, foto_url, acepta_portal, activo)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, version, created_at, updated_at`
 	err = tx.QueryRow(ctx, insertMedico,
-		m.Persona.ID, m.EspecialidadID, m.NumeroLicencia, m.TipoProfesional, m.Activo,
+		m.Persona.ID, m.UsuarioID, m.EspecialidadID, m.NumeroLicencia,
+		m.TipoProfesional, m.DuracionCitaMin, m.Bio, m.FotoURL, m.AceptaPortal, m.Activo,
 	).Scan(&m.ID, &m.Version, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return mapError(err)
@@ -120,12 +126,17 @@ func (s *MedicoStore) Actualizar(ctx context.Context, m *entities.Medico) error 
 		SET especialidad_id = $2,
 			numero_licencia = $3,
 			tipo_profesional = $4,
+			duracion_cita_min = $5,
+			bio = $6,
+			foto_url = $7,
+			acepta_portal = $8,
 			version = version + 1
-		WHERE id = $1 AND version = $5
+		WHERE id = $1 AND version = $9
 		RETURNING persona_id`
 	var personaID int64
 	err = tx.QueryRow(ctx, updateMedico, m.ID,
-		m.EspecialidadID, m.NumeroLicencia, m.TipoProfesional, m.Version,
+		m.EspecialidadID, m.NumeroLicencia, m.TipoProfesional,
+		m.DuracionCitaMin, m.Bio, m.FotoURL, m.AceptaPortal, m.Version,
 	).Scan(&personaID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return conflictoConcurrencia("médico", m.ID)
@@ -157,6 +168,22 @@ func (s *MedicoStore) Actualizar(ctx context.Context, m *entities.Medico) error 
 	return mapError(tx.Commit(ctx))
 }
 
+// VincularUsuario asocia una cuenta con un médico existente. La unicidad del
+// vínculo está garantizada por el índice medicos_usuario_id_uk.
+func (s *MedicoStore) VincularUsuario(ctx context.Context, medicoID, usuarioID int64) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE medicos
+		SET usuario_id = $2, version = version + 1
+		WHERE id = $1`, medicoID, usuarioID)
+	if err != nil {
+		return mapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return noEncontrado("médico", medicoID)
+	}
+	return nil
+}
+
 // Eliminar es una baja lógica para preservar las citas históricas.
 func (s *MedicoStore) Eliminar(ctx context.Context, id int64) error {
 	tag, err := s.db.Exec(ctx, `
@@ -174,17 +201,25 @@ func (s *MedicoStore) Eliminar(ctx context.Context, id int64) error {
 
 func scanMedico(row rowScanner) (*entities.Medico, error) {
 	var m entities.Medico
+	var usuarioID pgtype.Int8
 	err := row.Scan(
-		&m.ID, &m.EspecialidadID, &m.NumeroLicencia, &m.TipoProfesional,
+		&m.ID, &usuarioID, &m.EspecialidadID, &m.NumeroLicencia, &m.TipoProfesional,
+		&m.DuracionCitaMin, &m.Bio, &m.FotoURL, &m.AceptaPortal,
 		&m.Activo, &m.Version, &m.CreatedAt, &m.UpdatedAt,
 		&m.Persona.ID, &m.Persona.TipoDocumento, &m.Persona.NumeroDocumento,
 		&m.Persona.Nombres, &m.Persona.Apellidos, &m.Persona.FechaNacimiento,
 		&m.Persona.Sexo, &m.Persona.Telefono, &m.Persona.Email, &m.Persona.Direccion,
 		&m.Especialidad.ID, &m.Especialidad.Codigo, &m.Especialidad.Nombre,
-		&m.Especialidad.Descripcion, &m.Especialidad.CreatedAt, &m.Especialidad.UpdatedAt,
+		&m.Especialidad.Descripcion, &m.Especialidad.RequiereDerivacion,
+		&m.Especialidad.Activa, &m.Especialidad.Orden, &m.Especialidad.DuracionCitaMin,
+		&m.Especialidad.Version, &m.Especialidad.CreatedAt, &m.Especialidad.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if usuarioID.Valid {
+		id := usuarioID.Int64
+		m.UsuarioID = &id
 	}
 	return &m, nil
 }
