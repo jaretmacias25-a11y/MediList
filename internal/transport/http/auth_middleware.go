@@ -14,19 +14,35 @@ import (
 )
 
 type claimsContextKey struct{}
+type actorContextKey struct{}
 
-var claimsKey claimsContextKey
+var (
+	claimsKey claimsContextKey
+	actorKey  actorContextKey
+)
 
-// AuthMiddleware valida el access token y los permisos requeridos.
+// AuthMiddleware valida el access token, resuelve el Actor y exige permisos.
 type AuthMiddleware struct {
-	auth      *service.AuthService
-	auditoria service.AuditoriaStore
-	logger    *slog.Logger
+	auth       *service.AuthService
+	actorStore service.ActorStore
+	auditoria  service.AuditoriaStore
+	logger     *slog.Logger
 }
 
-// NewAuthMiddleware construye el middleware de autenticación.
-func NewAuthMiddleware(auth *service.AuthService, auditoria service.AuditoriaStore, logger *slog.Logger) *AuthMiddleware {
-	return &AuthMiddleware{auth: auth, auditoria: auditoria, logger: logger}
+// NewAuthMiddleware construye el middleware de autenticación. El ActorStore es
+// opcional para facilitar pruebas aisladas del middleware; en producción el
+// router siempre lo inyecta.
+func NewAuthMiddleware(
+	auth *service.AuthService,
+	auditoria service.AuditoriaStore,
+	logger *slog.Logger,
+	actorStore ...service.ActorStore,
+) *AuthMiddleware {
+	var store service.ActorStore
+	if len(actorStore) > 0 {
+		store = actorStore[0]
+	}
+	return &AuthMiddleware{auth: auth, actorStore: store, auditoria: auditoria, logger: logger}
 }
 
 // Require exige un token válido y, si permission no está vacío, ese permiso.
@@ -54,6 +70,29 @@ func (m *AuthMiddleware) Require(permission string, next http.Handler) http.Hand
 			meta.UsuarioID = claims.UsuarioID
 		}
 
+		actor := &service.Actor{
+			UsuarioID: claims.UsuarioID,
+			Username:  claims.Username,
+			Roles:     claims.Roles,
+			Permisos:  claims.Permisos,
+		}
+		if m.actorStore != nil {
+			vinculos, err := m.actorStore.ResolverVinculos(r.Context(), claims.UsuarioID)
+			if err != nil {
+				if errors.Is(err, entities.ErrNotFound) {
+					writeUnauthorized(w)
+					return
+				}
+				m.logger.Error("no se pudieron resolver los vínculos de la cuenta", "error", err)
+				writeServiceError(w, r, m.logger, err)
+				return
+			}
+			actor.Email = vinculos.Email
+			actor.EmailVerificado = vinculos.EmailVerificado
+			actor.PacienteID = vinculos.PacienteID
+			actor.MedicoID = vinculos.MedicoID
+		}
+
 		if permission != "" && !tienePermiso(claims, permission) {
 			m.registrarDenegacion(r, claims, permission)
 			writeError(w, http.StatusForbidden, "forbidden", "no tienes permiso para realizar esta acción")
@@ -61,7 +100,28 @@ func (m *AuthMiddleware) Require(permission string, next http.Handler) http.Hand
 		}
 
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
+		ctx = context.WithValue(ctx, actorKey, actor)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// soloPersonalAdministrativo evita que un médico use los endpoints globales
+// de pacientes o citas. No basta con retirar permisos de la base: un access
+// token emitido antes de la migración conserva los permisos antiguos hasta
+// expirar. Esta guarda se evalúa por roles, no por permisos embebidos.
+func soloPersonalAdministrativo(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor := actorFromContext(r.Context())
+		if actor == nil {
+			writeUnauthorized(w)
+			return
+		}
+		if !actor.PuedeGestionarDatosGlobales() {
+			writeError(w, http.StatusForbidden, "forbidden",
+				"este endpoint es administrativo; usa los endpoints de tu portal")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -73,6 +133,12 @@ func writeUnauthorized(w http.ResponseWriter) {
 func claimsFromContext(ctx context.Context) *service.Claims {
 	claims, _ := ctx.Value(claimsKey).(*service.Claims)
 	return claims
+}
+
+// actorFromContext devuelve el Actor resuelto por el middleware de auth.
+func actorFromContext(ctx context.Context) *service.Actor {
+	actor, _ := ctx.Value(actorKey).(*service.Actor)
+	return actor
 }
 
 func tienePermiso(claims *service.Claims, permiso string) bool {

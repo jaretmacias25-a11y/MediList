@@ -2,7 +2,7 @@
 
 > Fecha: 26/10/2026  
 > Alcance: backend Go/PostgreSQL. No incluye frontend.  
-> Estado: Fase 2 completada; la Fase 3 (actor/ownership y portal) es la siguiente.  
+> Estado: Fase 3 completada; la Fase 4 (catálogo, horarios y disponibilidad) es la siguiente.  
 > Documentos relacionados: `README.md` (estado actual) y `entidades.md` (modelo completo objetivo).
 
 ---
@@ -17,7 +17,7 @@ La base actual ya tiene una parte importante del backend administrativo:
 - control de concurrencia con restricciones de exclusión y versiones optimistas;
 - auditoría, logs estructurados y retención.
 
-La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones. Todavía **no existe el portal del paciente ni el del médico**: falta construir la autorización por fila, la agenda propia, la disponibilidad calculada, las acciones del médico y el uso de derivaciones desde la API.
+La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Todavía **no existe la disponibilidad calculada, la agenda de portal ni las acciones clínicas del médico**: eso corresponde a las fases 4–8. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
 
 El orden recomendado para concluir el backend es:
 
@@ -413,7 +413,7 @@ No hardcodear códigos de especialidad en el código. La lista directa se contro
 
 ## 5. Modelo de datos y migraciones
 
-Numeración continua desde la última migración aplicada (`012_cuentas_vinculacion.sql`). Cada migración debe ser idempotente en lo posible, probarse desde cero y probarse sobre una copia de la base actual.
+Numeración continua desde la última migración aplicada (`013_ownership_medico.sql`). Cada migración debe ser idempotente en lo posible, probarse desde cero y probarse sobre una copia de la base actual.
 
 ### 5.1 Migración 009 — cuentas, catálogo y permisos
 
@@ -706,7 +706,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS solicitudes_vinculacion_usuario_pendiente_uk
 - Rechazar exige motivo, desactiva la cuenta y revoca sus refresh tokens.
 - Los índices parciales impiden dos solicitudes pendientes para la misma historia o cuenta.
 
-### 5.5 Migración 013 — notificaciones y outbox (propuesta)
+### 5.5 Migración 013 — ownership del médico
+
+**Estado:** aplicada. Archivo `migrations/013_ownership_medico.sql`.
+
+- Retira del rol `medico` los permisos globales `pacientes:leer`, `citas:leer` y `citas:escribir`.
+- Reafirma de forma idempotente `medico:agenda:*`, `medico:nota:*`, `pacientes:atendidos:leer` y `derivaciones:*`.
+- No modifica tablas ni datos clínicos.
+- La API añade una guarda por roles en los endpoints administrativos para que un access token emitido antes de la migración no siga usándolos hasta expirar.
+
+### 5.6 Migración 014 — notificaciones y outbox (propuesta)
 
 Para no perder correos si el proveedor falla:
 
@@ -737,14 +746,14 @@ CREATE INDEX IF NOT EXISTS notificaciones_pendientes_idx
 - Nunca se guardan tokens de verificación/reset en texto plano ni en logs.
 - La Fase 2 usa un adaptador de archivo para desarrollo; para producción, SMTP/SES/SendGrid detrás de `service.EmailSender`.
 
-### 5.6 Backfill y compatibilidad
+### 5.7 Backfill y compatibilidad
 
 - No eliminar columnas existentes.
 - No cambiar el significado de `citas.estado` existente.
 - Las citas históricas no tienen derivación; se quedan con `derivacion_id = NULL`.
 - Los pacientes históricos no tienen cuenta; se vinculan cuando lo soliciten.
 - Los médicos históricos no tienen usuario; administración los vincula.
-- Los permisos globales actuales se mantienen temporalmente y se aplica scoping por fila; luego se retiran en una migración de limpieza.
+- Los permisos globales de pacientes/citas para el rol `medico` se retiraron en la migración 013; la API mantiene además una guarda por roles para tokens antiguos.
 - Probar la migración sobre una copia de la base actual y sobre una base vacía.
 
 ---
@@ -834,8 +843,8 @@ Decisiones implementadas:
 
 | Método | Ruta | Permiso | Descripción |
 |---|---|---|---|
-| `GET` | `/portal/perfil` | `portal:perfil:leer` | Datos propios y estado de cuenta |
-| `PUT` | `/portal/perfil` | `portal:perfil:escribir` | Actualiza contacto; no documento ni datos clínicos |
+| `GET` | `/portal/perfil` | `portal:perfil:leer` | Datos propios y estado de cuenta (implementado en Fase 3) |
+| `PUT` | `/portal/perfil` | `portal:perfil:escribir` | Actualiza contacto; no documento ni datos clínicos (implementado en Fase 3) |
 | `GET` | `/portal/especialidades` | `catalogo:leer` | Catálogo visible, con `requiere_derivacion` |
 | `GET` | `/portal/medicos` | `catalogo:leer` | Médicos activos; filtro por especialidad |
 | `GET` | `/portal/disponibilidad` | `portal:citas:leer` | Slots disponibles por médico/rango |
@@ -903,14 +912,14 @@ Respuesta de cita recomendada:
 
 | Método | Ruta | Permiso | Descripción |
 |---|---|---|---|
-| `GET` | `/medico/agenda` | `medico:agenda:leer` | Citas propias por rango/estado |
-| `GET` | `/medico/citas/{id}` | `medico:agenda:leer` | Detalle solo si es su cita |
+| `GET` | `/medico/agenda` | `medico:agenda:leer` | Citas propias por rango/estado (básico implementado en Fase 3) |
+| `GET` | `/medico/citas/{id}` | `medico:agenda:leer` | Detalle solo si es su cita (lectura implementada en Fase 3) |
 | `PATCH` | `/medico/citas/{id}/estado` | `medico:agenda:escribir` | Confirma, atiende o marca no asistió |
 | `POST` | `/medico/citas/{id}/nota` | `medico:nota:escribir` | Nota mínima de consulta |
 | `PUT` | `/medico/citas/{id}/nota` | `medico:nota:escribir` | Actualiza nota con `version` |
 | `POST` | `/medico/citas/{id}/derivaciones` | `derivaciones:escribir` | Emite derivación desde cita atendida |
 | `GET` | `/medico/derivaciones` | `derivaciones:leer` | Derivaciones emitidas por el médico |
-| `GET` | `/medico/pacientes/{id}` | `pacientes:atendidos:leer` | Paciente con relación de atención |
+| `GET` | `/medico/pacientes/{id}` | `pacientes:atendidos:leer` | Paciente con relación de atención (implementado en Fase 3) |
 
 Transiciones permitidas al médico:
 
@@ -1050,7 +1059,9 @@ Tareas:
 - Migración `009`: cuentas, vínculos, rol paciente, permisos, tokens, términos, catálogo.
 - Migración `010`: horarios y bloqueos.
 - Migración `011`: derivaciones, metadata de citas y nota mínima.
-- Migración `012` (P1): outbox de notificaciones.
+- Migración `012`: solicitudes de vinculación.
+- Migración `013`: ownership del médico y retiro de permisos globales.
+- Migración `014` (P1): outbox de notificaciones.
 - Crear entidades: `Derivacion`, `HorarioProfesional`, `BloqueoAgenda`, `NotaCita`, `TokenCuenta`, `Notificacion`.
 - Crear stores PostgreSQL correspondientes.
 - Actualizar stores existentes para `usuario_id`, `canal`, `derivacion_id`.
@@ -1085,19 +1096,21 @@ Tareas:
 
 ### Fase 3 — Actor, ownership y permisos por fila
 
+**Estado:** completada.
+
 **Objetivo:** cerrar el riesgo de que un paciente o médico vea datos ajenos.
 
 Tareas:
 
-- Extender el middleware para construir `Actor`.
-- Resolver `PacienteID` y `MedicoID` desde la base.
-- Extender `/auth/me`.
-- Implementar `GET/PUT /portal/perfil`.
-- Implementar `GET /medico/agenda` básico.
-- Aplicar filtros de ownership en citas, pacientes y derivaciones.
-- Retirar o neutralizar permisos globales del rol `medico`.
-- Probar IDOR: paciente A contra paciente B; médico A contra médico B; paciente contra datos administrativos.
-- Auditar accesos a datos propios y ajenos.
+- [x] Extender el middleware para construir `Actor`.
+- [x] Resolver `PacienteID` y `MedicoID` desde la base.
+- [x] Extender `/auth/me`.
+- [x] Implementar `GET/PUT /portal/perfil`.
+- [x] Implementar `GET /medico/agenda` básico.
+- [x] Aplicar filtros de ownership en citas y pacientes; derivaciones queda pendiente de su API en la Fase 6.
+- [x] Retirar o neutralizar permisos globales del rol `medico`.
+- [x] Probar IDOR: paciente A contra paciente B; médico A contra médico B; paciente contra datos administrativos.
+- [x] Auditar accesos a datos propios y ajenos.
 
 **Criterio de salida:** ningún actor puede leer o modificar recursos de otro cambiando un ID en la URL o en el body. Los tests de autorización fallan si se quita el filtro.
 
@@ -1319,7 +1332,7 @@ Tareas:
 
 ### 8.6 Pruebas de migración y regresión
 
-- Aplicar 009–012 sobre base vacía.
+- Aplicar 009–013 sobre base vacía.
 - Aplicar sobre copia de la base actual con citas, pacientes y médicos existentes.
 - Verificar que las citas históricas siguen consultables.
 - Verificar que los roles actuales no pierden acceso administrativo.
@@ -1436,7 +1449,7 @@ La Fase 2 registra `registro`, `registro_fallido`, `verificacion_email`, `verifi
 ### 10.1 Orden de despliegue
 
 1. Backup de base.
-2. Aplicar migraciones 009–012 en staging.
+2. Aplicar migraciones 009–013 en staging.
 3. Ejecutar pruebas de migración y regresión.
 4. Desplegar API con feature flags apagados.
 5. Crear/verificar catálogo y permisos.
@@ -1598,7 +1611,7 @@ Si se necesita una demo rápida antes de completar P1, el orden mínimo es:
 1. Fase 0: confirmar reglas.
 2. Fase 1: migraciones 009–011.
 3. Fase 2: registro/verificación con adaptador de email de archivo (completada).
-4. Fase 3: actor/ownership.
+4. Fase 3: actor/ownership (completada).
 5. Fase 4: horarios y disponibilidad.
 6. Fase 5: cita directa.
 7. Fase 6: médico atiende y deriva.
@@ -1812,7 +1825,53 @@ Incluye:
 - base de prueba temporal eliminada y datos HTTP de prueba eliminados;
 - `medilist` queda con 1 usuario (`admin`), 0 pacientes, 0 personas, 0 solicitudes y 0 tokens de cuenta.
 
-**Pendiente inmediato:** Fase 3. Extender el middleware con `Actor`, resolver `paciente_id`/`medico_id` desde los vínculos, aplicar ownership en citas/pacientes/derivaciones y crear el perfil propio. Los permisos `portal:*` ya existen en la base, pero todavía no hay endpoints que los usen.
+**Pendiente inmediato:** Fase 3 (ver Paso 6).
+
+### Paso 6 — Fase 3: Actor, ownership y portal básico
+
+**Estado:** completado.
+
+**Migración:** `migrations/013_ownership_medico.sql`.
+
+Incluye:
+
+- retiro de `pacientes:leer`, `citas:leer` y `citas:escribir` del rol `medico`;
+- reafirmación idempotente de `medico:agenda:*`, `medico:nota:*`, `pacientes:atendidos:leer` y `derivaciones:*`;
+- nota de compatibilidad: la guarda por roles de la API bloquea tokens antiguos que todavía conserven permisos globales.
+
+**Capa de aplicación:**
+
+- `service.Actor` con `UsuarioID`, `Username`, `Email`, `Roles`, `Permisos`, `PacienteID`, `MedicoID` y `EmailVerificado`;
+- `entities.VinculosUsuario` y puerto `ActorStore`;
+- `ActorStore` en PostgreSQL resuelve `pacientes.usuario_id` y `medicos.usuario_id` solo para perfiles activos;
+- el middleware construye el Actor una vez por request y lo guarda en el contexto;
+- `GET /auth/me` devuelve `paciente_id` y `medico_id` cuando existen;
+- `PortalPacienteService` obtiene y actualiza únicamente el perfil vinculado al Actor; el update solo toca teléfono, dirección y contacto de emergencia, con control de `version`;
+- `MedicoPortalService` fuerza `MedicoID` en la agenda, comprueba propiedad en el detalle de cita y exige una cita `programada`, `confirmada` o `atendida` para consultar un paciente;
+- guarda `soloPersonalAdministrativo` para `/pacientes` y `/citas`: aunque un token antiguo conserve los permisos retirados, un médico no puede usar los endpoints globales;
+- auditoría de lecturas propias y administrativas, con sufijo `_denegado` cuando el handler rechaza por ownership;
+- rutas nuevas: `GET/PUT /portal/perfil`, `GET /medico/agenda`, `GET /medico/citas/{id}` y `GET /medico/pacientes/{id}`.
+
+**Pruebas automatizadas:**
+
+- `TestActorStoreResuelveVinculosActivosYOwnership`: vínculos activos, paciente inactivo y relación de atención.
+- `TestMigracionRolMedicoSinPermisosGlobales`: el rol `medico` no conserva permisos globales y sí los propios.
+- `TestActorPermisosYAlcanceGlobal`, `TestActorExigeVinculosClinicos`.
+- `TestPortalPacientePerfilExigeVinculo`, `TestPortalPacientePerfilNoDevuelvePerfilDeOtroUsuario`, `TestPortalPacienteActualizarContactoConservaIdentidad`, `TestPortalPacienteActualizarContactoRechazaVersionVieja`.
+- `TestMedicoPortalAgendaFuerzaMedicoDelActor`, `TestMedicoPortalNoDevuelveCitaDeOtroMedico`, `TestMedicoPortalPacienteSinRelacionNoSeConsulta`.
+- `TestSoloPersonalAdministrativoBloqueaMedico`, `TestAuditDataAccessMarcaIntentoDenegado`.
+- Script repetible: `scripts/prueba_ownership.ps1`.
+
+**Validación realizada:**
+
+- migración 013 aplicada a `medilist` y a una base temporal desde cero;
+- `scripts/prueba_ownership.ps1` pasa sobre la base temporal;
+- `go test ./...` pasa sin `TEST_DATABASE_URL`;
+- flujo HTTP real sobre base temporal: login de paciente/médico, `paciente_id`/`medico_id` en `/auth/me`, perfil propio, rechazo de `paciente_id` en el body, actualización de contacto, agenda propia, `403` contra cita/paciente ajenos, acceso global del administrador y auditoría de accesos propios/denegados;
+- el rol `medico` de `medilist` queda solo con permisos propios y de catálogo;
+- `derivaciones` y `notas_cita` todavía no tienen endpoints; la misma regla de ownership se aplicará al implementar su API en la Fase 6.
+
+**Pendiente inmediato:** Fase 4 (catálogo, horarios y disponibilidad).
 
 
 

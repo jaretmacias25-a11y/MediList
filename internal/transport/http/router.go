@@ -20,8 +20,11 @@ type Dependencies struct {
 	Auth           *service.AuthService
 	Usuarios       *service.UsuarioService
 	Cuentas        *service.CuentaService
+	PortalPaciente *service.PortalPacienteService
+	MedicoPortal   *service.MedicoPortalService
 	Auditoria      *service.AuditoriaService
 	AuditoriaStore service.AuditoriaStore
+	ActorStore     service.ActorStore
 	Errores        *service.ErrorService
 	DB             *pgxpool.Pool
 	Logger         *slog.Logger
@@ -30,7 +33,7 @@ type Dependencies struct {
 // NewRouter construye el enrutador HTTP con todas las dependencias inyectadas.
 func NewRouter(d Dependencies) http.Handler {
 	mux := http.NewServeMux()
-	auth := NewAuthMiddleware(d.Auth, d.AuditoriaStore, d.Logger)
+	auth := NewAuthMiddleware(d.Auth, d.AuditoriaStore, d.Logger, d.ActorStore)
 
 	// Públicas
 	mux.HandleFunc("GET /health", healthHandler(d.DB))
@@ -65,11 +68,21 @@ func NewRouter(d Dependencies) http.Handler {
 	escritura("DELETE /api/v1/especialidades/{id}", "especialidades:escribir", eh.Eliminar)
 
 	ph := NewPacienteHandler(d.Pacientes, d.Logger)
-	protegido("GET /api/v1/pacientes", "pacientes:leer", ph.Listar)
-	protegido("GET /api/v1/pacientes/{id}", "pacientes:leer", ph.Obtener)
-	escritura("POST /api/v1/pacientes", "pacientes:escribir", ph.Crear)
-	escritura("PUT /api/v1/pacientes/{id}", "pacientes:escribir", ph.Actualizar)
-	escritura("DELETE /api/v1/pacientes/{id}", "pacientes:escribir", ph.Eliminar)
+	staffRead := func(pattern, permiso, accion, recurso string, handler http.HandlerFunc) {
+		mux.Handle(pattern, auth.Require(permiso,
+			auditDataAccess(d.AuditoriaStore, d.Logger, accion, recurso,
+				soloPersonalAdministrativo(handler))))
+	}
+	staffWrite := func(pattern, permiso string, handler http.HandlerFunc) {
+		mux.Handle(pattern, auth.Require(permiso,
+			auditMutations(d.AuditoriaStore, d.Logger,
+				soloPersonalAdministrativo(handler))))
+	}
+	staffRead("GET /api/v1/pacientes", "pacientes:leer", "consultar_pacientes", "pacientes", ph.Listar)
+	staffRead("GET /api/v1/pacientes/{id}", "pacientes:leer", "consultar_paciente", "pacientes", ph.Obtener)
+	staffWrite("POST /api/v1/pacientes", "pacientes:escribir", ph.Crear)
+	staffWrite("PUT /api/v1/pacientes/{id}", "pacientes:escribir", ph.Actualizar)
+	staffWrite("DELETE /api/v1/pacientes/{id}", "pacientes:escribir", ph.Eliminar)
 
 	mh := NewMedicoHandler(d.Medicos, d.Logger)
 	protegido("GET /api/v1/medicos", "medicos:leer", mh.Listar)
@@ -79,12 +92,30 @@ func NewRouter(d Dependencies) http.Handler {
 	escritura("DELETE /api/v1/medicos/{id}", "medicos:escribir", mh.Eliminar)
 
 	ch := NewCitaHandler(d.Citas, d.Logger)
-	protegido("GET /api/v1/citas", "citas:leer", ch.Listar)
-	protegido("GET /api/v1/citas/{id}", "citas:leer", ch.Obtener)
-	escritura("POST /api/v1/citas", "citas:escribir", ch.Crear)
-	escritura("PUT /api/v1/citas/{id}", "citas:escribir", ch.Actualizar)
-	escritura("PATCH /api/v1/citas/{id}/estado", "citas:escribir", ch.CambiarEstado)
-	escritura("DELETE /api/v1/citas/{id}", "citas:escribir", ch.Eliminar)
+	staffRead("GET /api/v1/citas", "citas:leer", "consultar_citas", "citas", ch.Listar)
+	staffRead("GET /api/v1/citas/{id}", "citas:leer", "consultar_cita", "citas", ch.Obtener)
+	staffWrite("POST /api/v1/citas", "citas:escribir", ch.Crear)
+	staffWrite("PUT /api/v1/citas/{id}", "citas:escribir", ch.Actualizar)
+	staffWrite("PATCH /api/v1/citas/{id}/estado", "citas:escribir", ch.CambiarEstado)
+	staffWrite("DELETE /api/v1/citas/{id}", "citas:escribir", ch.Eliminar)
+
+	portalHandler := NewPortalHandler(d.PortalPaciente, d.Logger)
+	mux.Handle("GET /api/v1/portal/perfil", auth.Require("portal:perfil:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_perfil_propio", "perfil_paciente",
+			http.HandlerFunc(portalHandler.Perfil))))
+	mux.Handle("PUT /api/v1/portal/perfil", auth.Require("portal:perfil:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalHandler.ActualizarPerfil))))
+
+	medicoPortalHandler := NewMedicoPortalHandler(d.MedicoPortal, d.Logger)
+	mux.Handle("GET /api/v1/medico/agenda", auth.Require("medico:agenda:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_agenda_propia", "agenda_medico",
+			http.HandlerFunc(medicoPortalHandler.Agenda))))
+	mux.Handle("GET /api/v1/medico/citas/{id}", auth.Require("medico:agenda:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_cita_propia", "citas",
+			http.HandlerFunc(medicoPortalHandler.ObtenerCita))))
+	mux.Handle("GET /api/v1/medico/pacientes/{id}", auth.Require("pacientes:atendidos:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_paciente_atendido", "pacientes",
+			http.HandlerFunc(medicoPortalHandler.ObtenerPaciente))))
 
 	uh := NewUsuarioHandler(d.Usuarios, d.Logger)
 	protegido("GET /api/v1/usuarios", "usuarios:leer", uh.Listar)

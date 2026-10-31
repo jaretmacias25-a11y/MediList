@@ -69,6 +69,23 @@ type usuarioResponse struct {
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
+// meResponse extiende el usuario con los perfiles clínicos vinculados. Estos
+// IDs son de solo lectura: el cliente no puede enviarlos para elegir dueño.
+type meResponse struct {
+	usuarioResponse
+	PacienteID *int64 `json:"paciente_id,omitempty"`
+	MedicoID   *int64 `json:"medico_id,omitempty"`
+}
+
+func nuevoMeResponse(u entities.Usuario, actor *service.Actor) meResponse {
+	resp := meResponse{usuarioResponse: nuevoUsuarioResponse(u)}
+	if actor != nil {
+		resp.PacienteID = actor.PacienteID
+		resp.MedicoID = actor.MedicoID
+	}
+	return resp
+}
+
 func nuevoUsuarioResponse(u entities.Usuario) usuarioResponse {
 	roles := u.Roles
 	if roles == nil {

@@ -86,6 +86,7 @@ func main() {
 	auditoriaStore := postgres.NewAuditoriaStore(pool)
 	errorStore := postgres.NewErrorStore(pool)
 	cuentaStore := postgres.NewCuentaStore(pool)
+	actorStore := postgres.NewActorStore(pool)
 
 	emailSender, err := notificaciones.NewDevEmailSender(
 		cfg.EmailOutboxDir, cfg.EmailFrom, logger,
@@ -103,6 +104,8 @@ func main() {
 	pacienteService := service.NewPacienteService(pacienteStore)
 	medicoService := service.NewMedicoService(medicoStore, especialidadStore)
 	citaService := service.NewCitaService(citaStore, pacienteStore, medicoStore)
+	portalPacienteService := service.NewPortalPacienteService(pacienteStore)
+	medicoPortalService := service.NewMedicoPortalService(citaStore, pacienteStore)
 
 	authService := service.NewAuthService(service.AuthConfig{
 		JWTSecret:        cfg.JWTSecret,
@@ -146,8 +149,11 @@ func main() {
 		Auth:           authService,
 		Usuarios:       usuarioService,
 		Cuentas:        cuentaService,
+		PortalPaciente: portalPacienteService,
+		MedicoPortal:   medicoPortalService,
 		Auditoria:      auditoriaService,
 		AuditoriaStore: auditoriaStore,
+		ActorStore:     actorStore,
 		Errores:        errorService,
 		DB:             pool,
 		Logger:         logger,

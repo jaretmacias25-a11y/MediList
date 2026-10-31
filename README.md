@@ -2,7 +2,7 @@
 
 Backend en **Go** para la gestión de pacientes, médicos, especialidades y citas de una clínica. Implementa una **arquitectura limpia por capas** con persistencia en **PostgreSQL**, autenticación **JWT**, control de acceso basado en roles (**RBAC**), cuentas de paciente con verificación de email, vinculación con historias existentes y auditoría de seguridad.
 
-El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad y la Fase 2 de cuentas de paciente: registro, verificación de email, recuperación de contraseña y vinculación con historias existentes.
+El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente (registro, verificación de email, recuperación de contraseña y vinculación con historias existentes) y la Fase 3 de autorización por actor: perfil propio del paciente, agenda propia del médico y controles de ownership para impedir el acceso a recursos ajenos.
 
 ---
 
@@ -47,6 +47,9 @@ MediList/
 │   │   ├── entities/                   # entidades del dominio
 │   │   ├── ports.go                    # interfaces de repositorio
 │   │   ├── auth_service.go             # login, refresh, bloqueo, cambio de clave
+│   │   ├── actor.go                    # Actor de autorización y vínculos de cuenta
+│   │   ├── portal_paciente_service.go  # perfil propio del paciente
+│   │   ├── medico_portal_service.go    # agenda y pacientes propios del médico
 │   │   ├── cuenta_service.go           # registro, verificación, reset y vinculación
 │   │   ├── error_service.go            # errores agregados (stdout + PostgreSQL)
 │   │   ├── retention_service.go        # retención de errores y auditoría
@@ -60,6 +63,7 @@ MediList/
 │   │   ├── db.go                       # pool pgx
 │   │   ├── errors.go                   # traducción de errores SQL
 │   │   ├── usuario_store.go            # usuarios, roles, bloqueos y token_version
+│   │   ├── actor_store.go              # resolución de vínculos paciente/médico
 │   │   ├── cuenta_store.go             # registro, tokens y solicitudes de vinculación
 │   │   ├── refresh_token_store.go      # refresh tokens hasheados
 │   │   ├── auditoria_store.go          # bitácora
@@ -68,8 +72,10 @@ MediList/
 │   │   └── *_store.go                  # almacenes clínicos
 │   └── transport/http/
 │       ├── router.go                   # rutas y health check
-│       ├── auth_middleware.go          # Bearer token, sesión y permisos
-│       ├── audit.go                    # auditoría de escrituras y consultas sensibles
+│       ├── auth_middleware.go          # Bearer token, Actor, sesión y permisos
+│       ├── audit.go                    # auditoría de escrituras y accesos a datos
+│       ├── portal_handler.go           # perfil propio del paciente
+│       ├── medico_portal_handler.go    # agenda y pacientes propios del médico
 │       ├── request_context.go          # X-Request-ID, traceparent y trace_id
 │       ├── report_error.go             # envío de errores a la agregación
 │       ├── rate_limit.go               # límite de intentos por IP
@@ -90,7 +96,8 @@ MediList/
 │   ├── 009_portal_paciente.sql         # cuentas, catálogo, tokens y permisos del portal
 │   ├── 010_disponibilidad.sql          # horarios recurrentes, bloqueos y exclusiones
 │   ├── 011_derivaciones_metadata.sql   # derivaciones, metadata de citas y notas
-│   └── 012_cuentas_vinculacion.sql     # solicitudes de vinculación de cuentas
+│   ├── 012_cuentas_vinculacion.sql     # solicitudes de vinculación de cuentas
+│   └── 013_ownership_medico.sql        # ownership y retiro de permisos globales del médico
 ├── deploy/observability/               # Loki + Promtail + Grafana + alertas
 │   ├── docker-compose.yml
 │   ├── loki/loki-config.yml
@@ -101,6 +108,7 @@ MediList/
 │   ├── observability.ps1               # levanta/consulta el stack local
 │   ├── prueba_concurrencia_disponibilidad.ps1 # prueba horarios/bloqueos concurrentes
 │   ├── prueba_cuentas.ps1              # registro, tokens, reset y vinculación
+│   ├── prueba_ownership.ps1            # actor, vínculos, IDOR y permisos por fila
 │   ├── prueba_derivaciones.ps1         # prueba derivaciones, notas y metadata
 │   ├── solapes_citas.sql               # diagnostica solapes antes de migrar
 │   └── run.ps1                         # inicia la API
@@ -198,6 +206,12 @@ MediList/
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_cuentas.ps1 -Password "TU_PASSWORD_LOCAL"
+   ```
+
+   La migración `013_ownership_medico.sql` retira al rol `medico` los permisos globales `pacientes:leer`, `citas:leer` y `citas:escribir`, y reafirma sus permisos propios (`medico:agenda:*`, `pacientes:atendidos:leer`, `derivaciones:*` y `medico:nota:*`). Además, la API bloquea por rol los endpoints administrativos aunque un access token antiguo todavía contenga los permisos retirados. Las pruebas de actor, vínculos y ownership se ejecutan con:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_ownership.ps1 -Password "TU_PASSWORD_LOCAL"
    ```
 
    El correo de desarrollo se escribe en `outbox/emails/*.eml`; el token no aparece en logs. Antes de producción se debe implementar un proveedor real detrás de `service.EmailSender` y cambiar `EMAIL_PROVIDER`. La API actualmente solo acepta `EMAIL_PROVIDER=outbox` y emite una advertencia si se usa en producción.
@@ -312,7 +326,7 @@ El enlace del correo apunta a `EMAIL_LINK_BASE_URL` y contiene el token en claro
 | `POST` | `/auth/login` | Pública | Inicia sesión y emite tokens; bloquea pacientes sin email verificado |
 | `POST` | `/auth/refresh` | Refresh token | Rota el refresh token y emite un nuevo par |
 | `POST` | `/auth/logout` | Refresh token | Revoca el refresh token |
-| `GET` | `/auth/me` | Bearer | Devuelve el usuario, roles, permisos y estado de verificación |
+| `GET` | `/auth/me` | Bearer | Devuelve el usuario, roles, permisos, estado de verificación y los IDs `paciente_id`/`medico_id` vinculados |
 | `POST` | `/auth/password` | Bearer | Cambia la contraseña del usuario autenticado |
 
 Los límites en memoria por instancia son: 5 registros por IP/hora; 30 verificaciones por IP/minuto; 3 reenvíos por IP+email/15 minutos; 5 solicitudes de recuperación por IP+email/15 minutos; 10 resets por IP/15 minutos. La respuesta `429` incluye `Retry-After`.
@@ -423,24 +437,26 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 | Rol | Enfoque |
 |---|---|
 | `admin` | Acceso total, gestión de usuarios y auditoría |
-| `medico` | Consulta clínica y gestión de citas |
+| `medico` | Agenda y pacientes propios; sin acceso global a pacientes/citas |
 | `recepcion` | Gestión de pacientes, agenda y vinculación de cuentas |
 | `enfermeria` | Consulta de pacientes, médicos y citas |
 | `auditor` | Consulta de usuarios, roles y auditoría |
-| `paciente` | Cuenta propia y permisos de portal; los endpoints de portal llegan en la Fase 3 |
+| `paciente` | Cuenta propia y perfil de portal; agenda de portal en la Fase 5 |
 
 ### Matriz de permisos
 
 | Recurso | `admin` | `medico` | `recepcion` | `enfermeria` | `auditor` | `paciente` |
 |---|---|---|---|---|---|---|
-| Pacientes (leer) | Sí | Sí | Sí | Sí | No | No |
+| Pacientes (leer) | Sí | No global; solo atendidos | Sí | Sí | No | No |
 | Pacientes (escribir) | Sí | No | Sí | No | No | No |
 | Médicos (leer) | Sí | Sí | Sí | Sí | No | No |
 | Médicos (escribir) | Sí | No | No | No | No | No |
 | Especialidades (leer) | Sí | Sí | Sí | Sí | No | No |
 | Especialidades (escribir) | Sí | No | No | No | No | No |
-| Citas (leer) | Sí | Sí | Sí | Sí | No | No |
-| Citas (escribir) | Sí | Sí | Sí | No | No | No |
+| Citas (leer) | Sí | No global; solo propias | Sí | Sí | No | No |
+| Citas (escribir) | Sí | No global; acciones propias en Fase 6 | Sí | No | No | No |
+| Perfil de portal (leer/escribir) | Sí | No | No | No | No | Sí |
+| Agenda médica propia | Sí | Sí | No | No | No | No |
 | Cuentas (vincular) | Sí | No | Sí | No | No | No |
 | Usuarios (leer) | Sí | No | No | No | Sí | No |
 | Usuarios (escribir) | Sí | No | No | No | No | No |
@@ -448,7 +464,7 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 | Auditoría (leer) | Sí | No | No | No | Sí | No |
 | Errores (leer) | Sí | No | No | No | Sí | No |
 
-El rol `paciente` ya tiene permisos `portal:*` y `catalogo:leer` en la base; todavía no existen las rutas de portal que los consumen.
+El rol `paciente` ya tiene permisos `portal:*` y `catalogo:leer`; la Fase 3 expone `GET/PUT /portal/perfil`. Los permisos de agenda de portal se consumirán en la Fase 5. El rol `medico` ya no tiene permisos globales de pacientes/citas: usa `medico:agenda:leer` y `pacientes:atendidos:leer`, y sus acciones de escritura propias se completarán en la Fase 6.
 
 ### Administración de usuarios
 
@@ -506,6 +522,8 @@ Notas:
 
 ### Pacientes
 
+Los endpoints de esta tabla son administrativos. Además del permiso, la API exige un rol `admin`, `recepcion` o `enfermeria`; un médico no puede usarlos aunque su access token contenga permisos antiguos. El médico consulta solo pacientes con relación de atención mediante `/medico/pacientes/{id}`.
+
 | Método | Ruta | Permiso | Descripción |
 |---|---|---|---|
 | `GET` | `/pacientes` | `pacientes:leer` | Lista; filtros `search`, `activos=true`, paginación |
@@ -526,6 +544,8 @@ Notas:
 
 ### Citas
 
+Los endpoints de esta tabla son administrativos y aplican la misma guarda por rol que pacientes. El médico usa `/medico/agenda` y `/medico/citas/{id}` para sus propias citas.
+
 | Método | Ruta | Permiso | Descripción |
 |---|---|---|---|
 | `GET` | `/citas` | `citas:leer` | Filtros: `paciente_id`, `medico_id`, `estado`, `desde`, `hasta`, `search` |
@@ -545,6 +565,25 @@ programada -> confirmada -> atendida
      \-> cancelada
      \-> reprogramada
 ```
+
+### Portal del paciente
+
+El perfil se resuelve exclusivamente desde `pacientes.usuario_id`. El body no admite `paciente_id`, `medico_id`, documento, nombres ni datos clínicos; un campo desconocido produce `400`.
+
+| Método | Ruta | Permiso | Descripción |
+|---|---|---|---|
+| `GET` | `/portal/perfil` | `portal:perfil:leer` | Devuelve la historia propia y el estado de la cuenta |
+| `PUT` | `/portal/perfil` | `portal:perfil:escribir` | Actualiza teléfono, dirección y contacto de emergencia; acepta `version` |
+
+### Portal del médico
+
+El médico se resuelve exclusivamente desde `medicos.usuario_id`. La agenda ignora cualquier `medico_id` enviado en la query o el body y siempre filtra por el vínculo del actor. Los detalles comprueban la propiedad y devuelven `403` si la cita o el paciente no pertenecen al médico.
+
+| Método | Ruta | Permiso | Descripción |
+|---|---|---|---|
+| `GET` | `/medico/agenda` | `medico:agenda:leer` | Citas propias; filtros `estado`, `desde`, `hasta`, paginación |
+| `GET` | `/medico/citas/{id}` | `medico:agenda:leer` | Detalle solo si la cita es propia |
+| `GET` | `/medico/pacientes/{id}` | `pacientes:atendidos:leer` | Paciente con cita `programada`, `confirmada` o `atendida` con el médico |
 
 ### Concurrencia y consistencia
 
@@ -574,6 +613,7 @@ Se registran:
 - Operaciones de escritura autenticadas (`POST`, `PUT`, `PATCH`, `DELETE`).
 - Intentos de acceso denegados por falta de permisos.
 - Consultas a `/auditoria` y `/errores`, porque exponen información sensible.
+- Accesos autorizados a datos clínicos propios o administrativos y los intentos denegados por ownership en `/portal/perfil`, `/medico/agenda`, `/medico/citas/{id}`, `/medico/pacientes/{id}`, `/pacientes` y `/citas`. Los intentos rechazados se registran con el sufijo `_denegado`.
 - `trace_id` en cada evento para cruzarlo con los logs y la tabla `errores_aplicacion`.
 
 No se almacenan contraseñas, tokens ni cuerpos de solicitud en la bitácora.
@@ -846,9 +886,12 @@ Pruebas de persistencia y concurrencia sobre una base temporal creada desde cero
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_cuentas.ps1 -Password "TU_PASSWORD_LOCAL"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_ownership.ps1 -Password "TU_PASSWORD_LOCAL"
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_derivaciones.ps1 -Password "TU_PASSWORD_LOCAL"
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_concurrencia_disponibilidad.ps1 -Password "TU_PASSWORD_LOCAL"
 ```
+
+Las pruebas de ownership cubren la resolución de vínculos, la retirada de permisos globales del rol `medico`, el perfil propio, la agenda forzada por médico, el bloqueo de citas/pacientes ajenos, la guarda por roles en endpoints administrativos y la auditoría de accesos denegados.
 
 Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos registros concurrentes del mismo documento, verificación de un solo uso, token vencido y reutilizado, reset con revocación de refresh tokens, aprobación/rechazo de vinculación y vinculación de médico. También se prueba que el login de un paciente sin email verificado no emite sesión y que una contraseña incorrecta no revela el estado de verificación.
 

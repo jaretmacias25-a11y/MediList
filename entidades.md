@@ -72,6 +72,8 @@ Reglas de seguridad:
 16. Un documento existente sin cuenta no crea otra historia: genera una `solicitud_vinculacion`. La aprobación vincula la cuenta y el rechazo desactiva la cuenta pendiente.
 17. Una cuenta y una historia clínica tienen como máximo un vínculo activo. La cuenta de médico se crea por administración y se vincula a un perfil existente.
 18. Las cuentas de paciente se vinculan a `pacientes.usuario_id`; los médicos a `medicos.usuario_id`. Los endpoints de portal no aceptan esos IDs desde el cliente.
+19. El middleware resuelve un `Actor` por request: usuario, roles, permisos, email verificado y los vínculos `paciente_id`/`medico_id` de perfiles activos. Los servicios de portal usan esos IDs, no parámetros del cliente.
+20. Los endpoints administrativos de pacientes y citas exigen un rol `admin`, `recepcion` o `enfermeria`; un médico solo consulta sus citas y los pacientes con relación de atención (`programada`, `confirmada` o `atendida`). Los accesos propios y los intentos denegados se auditan.
 
 ---
 

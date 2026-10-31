@@ -24,7 +24,14 @@ type PacienteStore interface {
 	Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Paciente, error)
 	Actualizar(ctx context.Context, p *entities.Paciente) error
 	VincularUsuario(ctx context.Context, pacienteID, usuarioID int64) error
+	PerteneceAMedico(ctx context.Context, pacienteID, medicoID int64) (bool, error)
 	Eliminar(ctx context.Context, id int64) error
+}
+
+// ActorStore resuelve los vínculos de una cuenta para construir el Actor de
+// cada solicitud. No se confía en IDs enviados por el cliente.
+type ActorStore interface {
+	ResolverVinculos(ctx context.Context, usuarioID int64) (*entities.VinculosUsuario, error)
 }
 
 // MedicoStore es el puerto que debe implementar el repositorio.

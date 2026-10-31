@@ -90,6 +90,57 @@ func auditSensitiveReads(store service.AuditoriaStore, logger *slog.Logger, next
 	})
 }
 
+// auditDataAccess registra accesos a datos clínicos propios y administrativos.
+// Si el handler devuelve 403, la acción se marca como denegada para distinguir
+// un intento de IDOR de una consulta autorizada. El wrapper se coloca fuera de
+// la guarda de ownership para que el intento quede auditado aunque se rechace.
+func auditDataAccess(
+	store service.AuditoriaStore,
+	logger *slog.Logger,
+	accion, recurso string,
+	next http.Handler,
+) http.Handler {
+	if store == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &responseRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+
+		actor := actorFromContext(r.Context())
+		if actor == nil {
+			return
+		}
+		estado := rec.status
+		if estado == 0 {
+			estado = http.StatusOK
+		}
+		accionFinal := accion
+		if estado == http.StatusForbidden || estado == http.StatusNotFound {
+			accionFinal += "_denegado"
+		}
+
+		entrada := &entities.Auditoria{
+			UsuarioID:  &actor.UsuarioID,
+			Username:   actor.Username,
+			Accion:     accionFinal,
+			Recurso:    recurso,
+			Metodo:     r.Method,
+			Ruta:       r.URL.Path,
+			EstadoHTTP: estado,
+			IP:         clientIP(r),
+			UserAgent:  r.UserAgent(),
+			TraceID:    observability.TraceID(r.Context()),
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := store.Registrar(ctx, entrada); err != nil {
+			logger.Error("no se pudo registrar el acceso a datos clínicos", "error", err)
+		}
+	})
+}
+
 func accionDeSolicitud(r *http.Request) string {
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/revocar-sesiones"):
@@ -98,6 +149,8 @@ func accionDeSolicitud(r *http.Request) string {
 		return "desbloquear"
 	case strings.HasSuffix(r.URL.Path, "/estado"):
 		return "cambiar_estado"
+	case strings.HasSuffix(r.URL.Path, "/portal/perfil"):
+		return "actualizar_perfil_propio"
 	}
 	return accionDeMetodo(r.Method)
 }

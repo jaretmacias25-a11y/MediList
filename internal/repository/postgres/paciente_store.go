@@ -196,6 +196,25 @@ func (s *PacienteStore) VincularUsuario(ctx context.Context, pacienteID, usuario
 	return nil
 }
 
+// PerteneceAMedico indica si el paciente tiene una cita vigente o atendida
+// con el profesional. Las citas canceladas o reprogramadas no crean una
+// relación de atención para el portal médico.
+func (s *PacienteStore) PerteneceAMedico(ctx context.Context, pacienteID, medicoID int64) (bool, error) {
+	const q = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM citas
+			WHERE paciente_id = $1
+			  AND medico_id = $2
+			  AND estado IN ('programada', 'confirmada', 'atendida')
+		)`
+	var existe bool
+	if err := s.db.QueryRow(ctx, q, pacienteID, medicoID).Scan(&existe); err != nil {
+		return false, mapError(err)
+	}
+	return existe, nil
+}
+
 // Eliminar es una baja lógica para preservar la historia clínica.
 func (s *PacienteStore) Eliminar(ctx context.Context, id int64) error {
 	tag, err := s.db.Exec(ctx, `

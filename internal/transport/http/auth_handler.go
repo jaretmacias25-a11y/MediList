@@ -96,7 +96,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, r, h.logger, err)
 		return
 	}
-	writeData(w, http.StatusOK, nuevoUsuarioResponse(*usuario))
+	writeData(w, http.StatusOK, nuevoMeResponse(*usuario, actorFromContext(r.Context())))
 }
 
 func (h *AuthHandler) CambiarPassword(w http.ResponseWriter, r *http.Request) {

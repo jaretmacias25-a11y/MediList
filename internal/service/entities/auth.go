@@ -13,6 +13,16 @@ type Rol struct {
 	UpdatedAt   time.Time
 }
 
+// VinculosUsuario contiene los perfiles clínicos asociados a una cuenta.
+// Se resuelven desde pacientes.usuario_id y medicos.usuario_id. Un vínculo a
+// un perfil inactivo no se considera válido para el portal.
+type VinculosUsuario struct {
+	Email           string
+	EmailVerificado bool
+	PacienteID      *int64
+	MedicoID        *int64
+}
+
 // Usuario representa una cuenta de acceso al sistema.
 type Usuario struct {
 	ID                  int64

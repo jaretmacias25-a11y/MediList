@@ -96,16 +96,26 @@ func (s *CitaService) Obtener(ctx context.Context, id int64) (*entities.Cita, er
 }
 
 func (s *CitaService) Listar(ctx context.Context, filtro entities.CitaFiltro) ([]entities.Cita, error) {
+	filtro, err := prepararFiltroCitas(filtro)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.Listar(ctx, filtro)
+}
+
+// prepararFiltroCitas normaliza y valida los filtros compartidos por la agenda
+// administrativa y la agenda propia del médico.
+func prepararFiltroCitas(filtro entities.CitaFiltro) (entities.CitaFiltro, error) {
 	filtro.ListOptions = filtro.ListOptions.Normalized()
 	filtro.Search = strings.TrimSpace(filtro.Search)
 
 	if filtro.Estado != "" && !filtro.Estado.Valido() {
-		return nil, entities.NewValidationError("estado de cita no válido")
+		return filtro, entities.NewValidationError("estado de cita no válido")
 	}
 	if filtro.Desde != nil && filtro.Hasta != nil && filtro.Desde.After(*filtro.Hasta) {
-		return nil, entities.NewValidationError("el rango de fechas es inválido: desde es posterior a hasta")
+		return filtro, entities.NewValidationError("el rango de fechas es inválido: desde es posterior a hasta")
 	}
-	return s.store.Listar(ctx, filtro)
+	return filtro, nil
 }
 
 func (s *CitaService) Actualizar(ctx context.Context, id int64, c entities.Cita) (*entities.Cita, error) {
