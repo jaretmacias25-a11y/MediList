@@ -8,6 +8,20 @@ import (
 	"medilist/internal/service/entities"
 )
 
+// EspecialidadInput contiene los campos editables del catálogo. Los punteros
+// de configuración permiten conservar los flags cuando la actualización no los
+// envía.
+type EspecialidadInput struct {
+	Codigo             string
+	Nombre             string
+	Descripcion        string
+	RequiereDerivacion *bool
+	Activa             *bool
+	Orden              *int
+	DuracionCitaMin    *int
+	Version            int64
+}
+
 // EspecialidadService contiene la lógica de negocio de especialidades.
 type EspecialidadService struct {
 	store EspecialidadStore
@@ -18,15 +32,31 @@ func NewEspecialidadService(store EspecialidadStore) *EspecialidadService {
 	return &EspecialidadService{store: store}
 }
 
-func (s *EspecialidadService) Crear(ctx context.Context, e entities.Especialidad) (*entities.Especialidad, error) {
+func (s *EspecialidadService) Crear(ctx context.Context, in EspecialidadInput) (*entities.Especialidad, error) {
+	e := entities.Especialidad{
+		Codigo:             in.Codigo,
+		Nombre:             in.Nombre,
+		Descripcion:        in.Descripcion,
+		RequiereDerivacion: true,
+		Activa:             true,
+		DuracionCitaMin:    30,
+	}
+	if in.RequiereDerivacion != nil {
+		e.RequiereDerivacion = *in.RequiereDerivacion
+	}
+	if in.Activa != nil {
+		e.Activa = *in.Activa
+	}
+	if in.Orden != nil {
+		e.Orden = *in.Orden
+	}
+	if in.DuracionCitaMin != nil {
+		e.DuracionCitaMin = *in.DuracionCitaMin
+	}
 	normalizarEspecialidad(&e)
 	if err := validarEspecialidad(e); err != nil {
 		return nil, err
 	}
-	// Una especialidad nueva es activa y, por seguridad clínica, exige
-	// derivación hasta que administración la configure como acceso directo.
-	e.Activa = true
-	e.RequiereDerivacion = true
 	if err := s.store.Crear(ctx, &e); err != nil {
 		return nil, err
 	}
@@ -46,7 +76,11 @@ func (s *EspecialidadService) Listar(ctx context.Context, opts entities.ListOpti
 	return s.store.Listar(ctx, opts)
 }
 
-func (s *EspecialidadService) Actualizar(ctx context.Context, id int64, e entities.Especialidad) (*entities.Especialidad, error) {
+func (s *EspecialidadService) Actualizar(
+	ctx context.Context,
+	id int64,
+	in EspecialidadInput,
+) (*entities.Especialidad, error) {
 	if id <= 0 {
 		return nil, entities.NewValidationError("id de especialidad inválido")
 	}
@@ -54,21 +88,31 @@ func (s *EspecialidadService) Actualizar(ctx context.Context, id int64, e entiti
 	if err != nil {
 		return nil, err
 	}
-	if e.Version > 0 && e.Version != actual.Version {
+	if in.Version > 0 && in.Version != actual.Version {
 		return nil, fmt.Errorf(
 			"%w: la especialidad fue modificada por otra operación; vuelve a consultarla e inténtalo de nuevo",
 			entities.ErrConflict)
 	}
+
+	e := *actual
+	e.Codigo = in.Codigo
+	e.Nombre = in.Nombre
+	e.Descripcion = in.Descripcion
+	if in.RequiereDerivacion != nil {
+		e.RequiereDerivacion = *in.RequiereDerivacion
+	}
+	if in.Activa != nil {
+		e.Activa = *in.Activa
+	}
+	if in.Orden != nil {
+		e.Orden = *in.Orden
+	}
+	if in.DuracionCitaMin != nil {
+		e.DuracionCitaMin = *in.DuracionCitaMin
+	}
 	normalizarEspecialidad(&e)
 	e.ID = id
 	e.Version = actual.Version
-	// Los flags del catálogo todavía no se editan desde este endpoint.
-	// Se preservan para no desactivar o volver directa una especialidad por
-	// accidente al actualizar código, nombre o descripción.
-	e.Activa = actual.Activa
-	e.RequiereDerivacion = actual.RequiereDerivacion
-	e.Orden = actual.Orden
-	e.DuracionCitaMin = actual.DuracionCitaMin
 	if err := validarEspecialidad(e); err != nil {
 		return nil, err
 	}

@@ -38,6 +38,10 @@ func configValidaParaPruebas() Config {
 		PasswordResetTTL:     time.Hour,
 		TermsVersion:         "2026-10",
 		MinEdadCuenta:        18,
+
+		ClinicTimezone:       "America/Guayaquil",
+		PortalMinNoticeHours: 2,
+		PortalMaxAdvanceDays: 90,
 	}
 }
 
@@ -111,6 +115,26 @@ func TestValidateConfiguracionDeCuentas(t *testing.T) {
 	cfg.MinEdadCuenta = 130
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("MIN_EDAD_CUENTA fuera de rango debe rechazarse")
+	}
+}
+
+func TestValidateZonaHorariaYHorizonteDelPortal(t *testing.T) {
+	cfg := configValidaParaPruebas()
+	cfg.ClinicTimezone = "Zona/NoExiste"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("una zona horaria IANA inválida debe rechazarse")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.PortalMaxAdvanceDays = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("el horizonte del portal debe ser al menos un día")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.PortalMinNoticeHours = 200
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("la antelación mínima fuera de rango debe rechazarse")
 	}
 }
 

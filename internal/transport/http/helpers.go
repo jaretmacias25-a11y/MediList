@@ -33,9 +33,25 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 }
 
 func pathID(r *http.Request) (int64, error) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	return pathInt(r, "id")
+}
+
+func pathInt(r *http.Request, nombre string) (int64, error) {
+	id, err := strconv.ParseInt(r.PathValue(nombre), 10, 64)
 	if err != nil || id <= 0 {
-		return 0, entities.NewValidationError("el id de la ruta no es válido")
+		return 0, entities.NewValidationError("el %s de la ruta no es válido", nombre)
+	}
+	return id, nil
+}
+
+func queryInt64(r *http.Request, nombre string) (int64, error) {
+	texto := strings.TrimSpace(r.URL.Query().Get(nombre))
+	if texto == "" {
+		return 0, nil
+	}
+	id, err := strconv.ParseInt(texto, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, entities.NewValidationError("%s no es válido", nombre)
 	}
 	return id, nil
 }

@@ -44,6 +44,80 @@ type MedicoStore interface {
 	Eliminar(ctx context.Context, id int64) error
 }
 
+// CatalogoStore expone el catálogo público y los médicos visibles en el
+// portal. No devuelve datos personales sensibles del profesional.
+type CatalogoStore interface {
+	ListarEspecialidadesActivas(ctx context.Context) ([]entities.Especialidad, error)
+	ListarMedicosPortal(
+		ctx context.Context,
+		especialidadID int64,
+		opts entities.ListOptions,
+	) ([]entities.Medico, error)
+}
+
+// HorarioStore es el puerto de persistencia de horarios recurrentes.
+type HorarioStore interface {
+	ListarHorariosPorMedico(ctx context.Context, medicoID int64) ([]entities.HorarioProfesional, error)
+	ObtenerHorarioPorID(
+		ctx context.Context,
+		medicoID, horarioID int64,
+	) (*entities.HorarioProfesional, error)
+	ListarHorariosVigentes(
+		ctx context.Context,
+		medicoID int64,
+		desde, hasta time.Time,
+	) ([]entities.HorarioProfesional, error)
+	CrearHorario(ctx context.Context, h *entities.HorarioProfesional) error
+	ActualizarHorario(ctx context.Context, h *entities.HorarioProfesional) error
+	DesactivarHorario(ctx context.Context, medicoID, horarioID int64) error
+	ExisteSolapamientoHorario(
+		ctx context.Context,
+		medicoID int64,
+		diaSemana int,
+		horaInicio, horaFin string,
+		vigenteDesde time.Time,
+		vigenteHasta *time.Time,
+		excluirID int64,
+	) (bool, error)
+}
+
+// BloqueoStore es el puerto de persistencia de bloqueos puntuales.
+type BloqueoStore interface {
+	ListarBloqueosRango(
+		ctx context.Context,
+		medicoID int64,
+		desde, hasta time.Time,
+	) ([]entities.BloqueoAgenda, error)
+	CrearBloqueo(ctx context.Context, b *entities.BloqueoAgenda) error
+	ActualizarBloqueo(ctx context.Context, b *entities.BloqueoAgenda) error
+	EliminarBloqueo(ctx context.Context, medicoID, bloqueoID int64) error
+	ExisteSolapamientoBloqueo(
+		ctx context.Context,
+		medicoID int64,
+		inicio, fin time.Time,
+		excluirID int64,
+	) (bool, error)
+}
+
+// DisponibilidadStore contiene las lecturas necesarias para calcular slots.
+type DisponibilidadStore interface {
+	ListarHorariosVigentes(
+		ctx context.Context,
+		medicoID int64,
+		desde, hasta time.Time,
+	) ([]entities.HorarioProfesional, error)
+	ListarBloqueosRango(
+		ctx context.Context,
+		medicoID int64,
+		desde, hasta time.Time,
+	) ([]entities.BloqueoAgenda, error)
+	ListarCitasActivasRango(
+		ctx context.Context,
+		medicoID int64,
+		desde, hasta time.Time,
+	) ([]entities.IntervaloOcupado, error)
+}
+
 // CitaStore es el puerto que debe implementar el repositorio.
 type CitaStore interface {
 	Crear(ctx context.Context, c *entities.Cita) error

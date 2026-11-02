@@ -9,6 +9,20 @@ import (
 	"medilist/internal/service/entities"
 )
 
+// MedicoInput contiene los datos editables del profesional. Los campos de
+// perfil público son punteros para que una actualización parcial no los borre.
+type MedicoInput struct {
+	Persona         entities.Persona
+	EspecialidadID  int64
+	NumeroLicencia  string
+	TipoProfesional string
+	DuracionCitaMin *int
+	Bio             *string
+	FotoURL         *string
+	AceptaPortal    *bool
+	Version         int64
+}
+
 // MedicoService contiene la lógica de negocio de profesionales de la salud.
 type MedicoService struct {
 	store             MedicoStore
@@ -30,7 +44,28 @@ func (s *MedicoService) validarEspecialidad(ctx context.Context, id int64) error
 	return nil
 }
 
-func (s *MedicoService) Crear(ctx context.Context, m entities.Medico) (*entities.Medico, error) {
+func (s *MedicoService) Crear(ctx context.Context, in MedicoInput) (*entities.Medico, error) {
+	m := entities.Medico{
+		Persona:         in.Persona,
+		EspecialidadID:  in.EspecialidadID,
+		NumeroLicencia:  in.NumeroLicencia,
+		TipoProfesional: in.TipoProfesional,
+		DuracionCitaMin: 30,
+		AceptaPortal:    true,
+		Activo:          true,
+	}
+	if in.DuracionCitaMin != nil {
+		m.DuracionCitaMin = *in.DuracionCitaMin
+	}
+	if in.Bio != nil {
+		m.Bio = *in.Bio
+	}
+	if in.FotoURL != nil {
+		m.FotoURL = *in.FotoURL
+	}
+	if in.AceptaPortal != nil {
+		m.AceptaPortal = *in.AceptaPortal
+	}
 	normalizarMedico(&m)
 	if err := validarMedico(m); err != nil {
 		return nil, err
@@ -38,8 +73,6 @@ func (s *MedicoService) Crear(ctx context.Context, m entities.Medico) (*entities
 	if err := s.validarEspecialidad(ctx, m.EspecialidadID); err != nil {
 		return nil, err
 	}
-	m.Activo = true
-	m.AceptaPortal = true
 	if err := s.store.Crear(ctx, &m); err != nil {
 		return nil, err
 	}
@@ -59,7 +92,11 @@ func (s *MedicoService) Listar(ctx context.Context, opts entities.ListOptions) (
 	return s.store.Listar(ctx, opts)
 }
 
-func (s *MedicoService) Actualizar(ctx context.Context, id int64, m entities.Medico) (*entities.Medico, error) {
+func (s *MedicoService) Actualizar(
+	ctx context.Context,
+	id int64,
+	in MedicoInput,
+) (*entities.Medico, error) {
 	if id <= 0 {
 		return nil, entities.NewValidationError("id de médico inválido")
 	}
@@ -67,24 +104,35 @@ func (s *MedicoService) Actualizar(ctx context.Context, id int64, m entities.Med
 	if err != nil {
 		return nil, err
 	}
-	if m.Version > 0 && m.Version != actual.Version {
+	if in.Version > 0 && in.Version != actual.Version {
 		return nil, fmt.Errorf(
 			"%w: el médico fue modificado por otra operación; vuelve a consultarlo e inténtalo de nuevo",
 			entities.ErrConflict)
 	}
 
+	m := *actual
+	m.Persona = in.Persona
+	m.Persona.ID = actual.Persona.ID
+	m.EspecialidadID = in.EspecialidadID
+	m.NumeroLicencia = in.NumeroLicencia
+	m.TipoProfesional = in.TipoProfesional
+	if in.DuracionCitaMin != nil {
+		m.DuracionCitaMin = *in.DuracionCitaMin
+	}
+	if in.Bio != nil {
+		m.Bio = *in.Bio
+	}
+	if in.FotoURL != nil {
+		m.FotoURL = *in.FotoURL
+	}
+	if in.AceptaPortal != nil {
+		m.AceptaPortal = *in.AceptaPortal
+	}
 	normalizarMedico(&m)
 	m.ID = id
-	m.Persona.ID = actual.Persona.ID
-	m.Activo = actual.Activo
 	m.Version = actual.Version
-	// La vinculación de cuenta y el perfil público se gestionan en flujos
-	// separados; este CRUD no debe borrarlos al actualizar datos personales.
 	m.UsuarioID = actual.UsuarioID
-	m.DuracionCitaMin = actual.DuracionCitaMin
-	m.Bio = actual.Bio
-	m.FotoURL = actual.FotoURL
-	m.AceptaPortal = actual.AceptaPortal
+	m.Activo = actual.Activo
 	if err := validarMedico(m); err != nil {
 		return nil, err
 	}

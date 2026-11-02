@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 )
 
 const devJWTSecret = "dev-only-insecure-secret-change-me-please-0123456789"
@@ -51,6 +52,10 @@ type Config struct {
 	PasswordResetTTL     time.Duration
 	TermsVersion         string
 	MinEdadCuenta        int
+
+	ClinicTimezone       string
+	PortalMinNoticeHours int
+	PortalMaxAdvanceDays int
 }
 
 // Load lee .env (sin sobrescribir variables del sistema) y las variables de entorno.
@@ -93,6 +98,10 @@ func Load() Config {
 		PasswordResetTTL:     time.Duration(getenvInt("PASSWORD_RESET_MINUTES", 60)) * time.Minute,
 		TermsVersion:         strings.TrimSpace(getenv("TERMS_VERSION", "2026-10")),
 		MinEdadCuenta:        getenvInt("MIN_EDAD_CUENTA", 18),
+
+		ClinicTimezone:       strings.TrimSpace(getenv("CLINIC_TIMEZONE", "America/Guayaquil")),
+		PortalMinNoticeHours: getenvInt("PORTAL_MIN_NOTICE_HOURS", 2),
+		PortalMaxAdvanceDays: getenvInt("PORTAL_MAX_ADVANCE_DAYS", 90),
 	}
 }
 
@@ -203,7 +212,24 @@ func (c Config) Validate() error {
 	if c.MinEdadCuenta < 0 || c.MinEdadCuenta > 120 {
 		return fmt.Errorf("MIN_EDAD_CUENTA debe estar entre 0 y 120")
 	}
+	if c.ClinicTimezone == "" {
+		return fmt.Errorf("CLINIC_TIMEZONE no puede estar vacía")
+	}
+	if _, err := time.LoadLocation(c.ClinicTimezone); err != nil {
+		return fmt.Errorf("CLINIC_TIMEZONE no es una zona IANA válida: %w", err)
+	}
+	if c.PortalMinNoticeHours < 0 || c.PortalMinNoticeHours > 168 {
+		return fmt.Errorf("PORTAL_MIN_NOTICE_HOURS debe estar entre 0 y 168")
+	}
+	if c.PortalMaxAdvanceDays < 1 || c.PortalMaxAdvanceDays > 365 {
+		return fmt.Errorf("PORTAL_MAX_ADVANCE_DAYS debe estar entre 1 y 365")
+	}
 	return nil
+}
+
+// ClinicLocation devuelve la zona horaria validada de la clínica.
+func (c Config) ClinicLocation() (*time.Location, error) {
+	return time.LoadLocation(c.ClinicTimezone)
 }
 
 func (c Config) LogLevel() slog.Level {

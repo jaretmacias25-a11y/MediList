@@ -1,8 +1,10 @@
 package service
 
 import (
+	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"medilist/internal/service/entities"
 )
@@ -100,6 +102,18 @@ func validarMedico(m entities.Medico) error {
 	if m.DuracionCitaMin < 5 || m.DuracionCitaMin > 240 {
 		return entities.NewValidationError("duracion_cita_min debe estar entre 5 y 240 minutos")
 	}
+	if utf8.RuneCountInString(m.Bio) > 2000 {
+		return entities.NewValidationError("bio no puede superar los 2000 caracteres")
+	}
+	if utf8.RuneCountInString(m.FotoURL) > 500 {
+		return entities.NewValidationError("foto_url no puede superar los 500 caracteres")
+	}
+	if m.FotoURL != "" {
+		enlace, err := url.Parse(m.FotoURL)
+		if err != nil || enlace.Host == "" || (enlace.Scheme != "http" && enlace.Scheme != "https") {
+			return entities.NewValidationError("foto_url debe ser una URL http(s) absoluta")
+		}
+	}
 	return nil
 }
 
@@ -116,8 +130,14 @@ func validarEspecialidad(e entities.Especialidad) error {
 	if e.Codigo == "" {
 		return entities.NewValidationError("codigo es obligatorio")
 	}
+	if utf8.RuneCountInString(e.Codigo) > 20 {
+		return entities.NewValidationError("codigo no puede superar los 20 caracteres")
+	}
 	if e.Nombre == "" {
 		return entities.NewValidationError("nombre es obligatorio")
+	}
+	if utf8.RuneCountInString(e.Nombre) > 120 {
+		return entities.NewValidationError("nombre no puede superar los 120 caracteres")
 	}
 	if e.Orden < 0 {
 		return entities.NewValidationError("orden no puede ser negativo")

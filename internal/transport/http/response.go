@@ -43,6 +43,14 @@ func writeList(w http.ResponseWriter, data any, opts entities.ListOptions, count
 	})
 }
 
+// writeCollection se usa para listas operativas pequeñas que no se paginan.
+func writeCollection(w http.ResponseWriter, data any, count int) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": data,
+		"meta": map[string]any{"count": count},
+	})
+}
+
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	requestID := w.Header().Get("X-Request-ID")
 	writeJSON(w, status, errorResponse{

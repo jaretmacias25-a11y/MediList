@@ -24,7 +24,7 @@ func (h *MedicoHandler) Crear(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, r, h.logger, err)
 		return
 	}
-	in, err := req.toEntity()
+	in, err := req.toService()
 	if err != nil {
 		writeServiceError(w, r, h.logger, err)
 		return
@@ -76,7 +76,7 @@ func (h *MedicoHandler) Actualizar(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, r, h.logger, err)
 		return
 	}
-	in, err := req.toEntity()
+	in, err := req.toService()
 	if err != nil {
 		writeServiceError(w, r, h.logger, err)
 		return

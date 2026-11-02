@@ -116,6 +116,8 @@ Las migraciones 008–011 materializan el modelo operativo de agenda:
 
 La entidad conceptual **Derivacion** se implementa como `derivaciones`, con la cita de origen (`cita_origen_id`) como encuentro habilitante. Una derivación solo nace de una cita de Medicina General `atendida`, la especialidad destino debe exigir derivación y una misma derivación no puede sostener dos citas activas o atendidas.
 
+**Fase 4 implementada:** `HorarioProfesional` y `BloqueoAgenda` tienen entidad, store, CRUD administrativo y reglas de solape/versión. `SlotDisponible` y `Disponibilidad` son objetos calculados por `DisponibilidadService`; no se persisten. El servicio convierte las horas locales de `CLINIC_TIMEZONE` a UTC, resta bloqueos y citas `programada`/`confirmada`, y aplica antelación mínima y horizonte máximo.
+
 Planificado para la Fase 6: `pacientes.medico_responsable_id` (asignación actual) y `transferencias_paciente` (historial). La transferencia es interna, exige `pacientes:transferir`, motivo y auditoría; el médico nuevo obtiene acceso por la asignación y el anterior conserva solo sus citas vigentes o atendidas.
 
 ---

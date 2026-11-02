@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: MediList API
-  version: 0.4.0
+  version: 0.5.0
   description: |
-    Esqueleto de contrato de la Fase 0. Describe los endpoints ya implementados
-    y los esquemas base de respuesta. Los endpoints de las fases 4-8 se agregan
-    a medida que se implementan; el roadmap está en doc.md.
+    Contrato de los endpoints implementados hasta la Fase 4. Los endpoints de
+    las fases 5-8 se agregan a medida que se implementan; el roadmap está en
+    doc.md.
 
     Convenciones:
     - Respuestas exitosas: {"data": ...} o {"data": [...], "meta": {...}}.
@@ -23,6 +23,7 @@ tags:
   - name: Catálogo
   - name: Pacientes
   - name: Médicos
+  - name: Agenda
   - name: Citas
   - name: Portal paciente
   - name: Portal médico
@@ -451,6 +452,137 @@ paths:
         '204': {$ref: '#/components/responses/NoContent'}
         '404': {$ref: '#/components/responses/NotFound'}
 
+  /api/v1/medicos/{id}/horarios:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Agenda]
+      summary: Lista los horarios recurrentes del médico
+      description: Incluye horarios activos e inactivos para revisión administrativa.
+      responses:
+        '200':
+          description: Horarios del médico
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      tags: [Agenda]
+      summary: Crea un horario recurrente
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/HorarioRequest'}
+      responses:
+        '201':
+          description: Horario creado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/medicos/{id}/horarios/{horarioId}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+      - {$ref: '#/components/parameters/HorarioId'}
+    put:
+      tags: [Agenda]
+      summary: Actualiza un horario con control de versión
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/HorarioRequest'}
+      responses:
+        '200':
+          description: Horario actualizado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      tags: [Agenda]
+      summary: Desactiva un horario (baja lógica)
+      responses:
+        '204': {$ref: '#/components/responses/NoContent'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/medicos/{id}/bloqueos:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Agenda]
+      summary: Lista bloqueos de agenda del médico
+      parameters:
+        - {$ref: '#/components/parameters/DesdeFecha'}
+        - {$ref: '#/components/parameters/HastaFecha'}
+      responses:
+        '200':
+          description: Bloqueos que se cruzan con el rango
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      tags: [Agenda]
+      summary: Crea un bloqueo puntual en UTC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BloqueoRequest'}
+      responses:
+        '201':
+          description: Bloqueo creado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/medicos/{id}/bloqueos/{bloqueoId}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+      - {$ref: '#/components/parameters/BloqueoId'}
+    put:
+      tags: [Agenda]
+      summary: Actualiza un bloqueo de agenda
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BloqueoRequest'}
+      responses:
+        '200':
+          description: Bloqueo actualizado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      tags: [Agenda]
+      summary: Elimina un bloqueo de agenda
+      responses:
+        '204': {$ref: '#/components/responses/NoContent'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /api/v1/citas:
     get:
       tags: [Citas]
@@ -581,6 +713,63 @@ paths:
               schema: {$ref: '#/components/schemas/Envelope'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/portal/especialidades:
+    get:
+      tags: [Portal paciente]
+      summary: Catálogo visible de especialidades
+      description: Solo devuelve especialidades activas y su regla de derivación.
+      responses:
+        '200':
+          description: Especialidades visibles
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /api/v1/portal/medicos:
+    get:
+      tags: [Portal paciente]
+      summary: Médicos visibles en el portal
+      description: Solo devuelve médicos activos que aceptan reservas por portal.
+      parameters:
+        - {$ref: '#/components/parameters/EspecialidadIdQuery'}
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Médicos visibles
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /api/v1/portal/disponibilidad:
+    get:
+      tags: [Portal paciente]
+      summary: Slots reservables de un médico
+      description: |
+        Genera slots en CLINIC_TIMEZONE, los convierte a UTC y resta bloqueos,
+        citas activas, antelación mínima y horizonte máximo. Las fechas son
+        inclusivas y usan formato YYYY-MM-DD.
+      parameters:
+        - {$ref: '#/components/parameters/MedicoIdQuery'}
+        - {$ref: '#/components/parameters/DesdeFecha'}
+        - {$ref: '#/components/parameters/HastaFecha'}
+      responses:
+        '200':
+          description: Disponibilidad calculada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
 
   /api/v1/medico/agenda:
     get:
@@ -878,6 +1067,38 @@ components:
       in: query
       required: false
       schema: {type: integer, minimum: 0, default: 0}
+    HorarioId:
+      name: horarioId
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    BloqueoId:
+      name: bloqueoId
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    EspecialidadIdQuery:
+      name: especialidad_id
+      in: query
+      required: false
+      schema: {type: integer, format: int64, minimum: 1}
+    MedicoIdQuery:
+      name: medico_id
+      in: query
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    DesdeFecha:
+      name: desde
+      in: query
+      required: false
+      description: Fecha local inclusiva en formato YYYY-MM-DD.
+      schema: {type: string, format: date}
+    HastaFecha:
+      name: hasta
+      in: query
+      required: false
+      description: Fecha local inclusiva en formato YYYY-MM-DD.
+      schema: {type: string, format: date}
 
   schemas:
     JsonObject:
@@ -1036,9 +1257,13 @@ components:
       type: object
       required: [codigo, nombre]
       properties:
-        codigo: {type: string, example: MED-GEN}
-        nombre: {type: string}
+        codigo: {type: string, maxLength: 20, example: MED-GEN}
+        nombre: {type: string, maxLength: 120}
         descripcion: {type: string}
+        requiere_derivacion: {type: boolean, default: true}
+        activa: {type: boolean, default: true}
+        orden: {type: integer, default: 0}
+        duracion_cita_min: {type: integer, minimum: 5, maximum: 240, default: 30}
         version: {type: integer, format: int64}
 
     PersonaRequest:
@@ -1074,7 +1299,102 @@ components:
         especialidad_id: {type: integer, format: int64}
         numero_licencia: {type: string}
         tipo_profesional: {type: string}
+        duracion_cita_min: {type: integer, minimum: 5, maximum: 240, default: 30}
+        bio: {type: string, maxLength: 2000}
+        foto_url: {type: string, format: uri, maxLength: 500}
+        acepta_portal: {type: boolean, default: true}
         version: {type: integer, format: int64}
+
+    HorarioRequest:
+      type: object
+      required: [dia_semana, hora_inicio, hora_fin]
+      properties:
+        dia_semana:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: 1 = lunes, 7 = domingo.
+        hora_inicio: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', example: '09:00'}
+        hora_fin: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', example: '12:00'}
+        duracion_slot_min: {type: integer, minimum: 5, maximum: 240, default: 30}
+        vigente_desde: {type: string, format: date, description: 'En creación, por defecto la fecha local actual; en actualización, ausente conserva el valor.'}
+        vigente_hasta: {type: string, format: date, description: 'En creación, vacío o ausente significa vigencia indefinida; en actualización, vacío la limpia y ausente conserva el valor.'}
+        activo: {type: boolean, default: true}
+        version: {type: integer, format: int64, description: Obligatorio para detectar actualizaciones concurrentes en PUT.}
+
+    BloqueoRequest:
+      type: object
+      required: [inicio, fin, motivo]
+      properties:
+        inicio: {type: string, format: date-time}
+        fin: {type: string, format: date-time}
+        motivo: {type: string, minLength: 1, maxLength: 500}
+
+    Horario:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        medico_id: {type: integer, format: int64}
+        dia_semana: {type: integer, minimum: 1, maximum: 7}
+        hora_inicio: {type: string}
+        hora_fin: {type: string}
+        duracion_slot_min: {type: integer}
+        vigente_desde: {type: string, format: date}
+        vigente_hasta: {type: string, format: date}
+        activo: {type: boolean}
+        version: {type: integer, format: int64}
+
+    Bloqueo:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        medico_id: {type: integer, format: int64}
+        inicio: {type: string, format: date-time}
+        fin: {type: string, format: date-time}
+        motivo: {type: string}
+        creado_por: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+
+    EspecialidadPortal:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        codigo: {type: string}
+        nombre: {type: string}
+        descripcion: {type: string}
+        requiere_derivacion: {type: boolean}
+        duracion_cita_min: {type: integer}
+
+    MedicoPortal:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        nombres: {type: string}
+        apellidos: {type: string}
+        especialidad: {$ref: '#/components/schemas/EspecialidadPortal'}
+        duracion_cita_min: {type: integer}
+        bio: {type: string}
+        foto_url: {type: string}
+
+    SlotDisponible:
+      type: object
+      properties:
+        inicio: {type: string, format: date-time, description: Instante UTC.}
+        fin: {type: string, format: date-time, description: Instante UTC.}
+        duracion_min: {type: integer}
+
+    Disponibilidad:
+      type: object
+      properties:
+        medico_id: {type: integer, format: int64}
+        especialidad_id: {type: integer, format: int64}
+        zona_horaria: {type: string, example: America/Guayaquil}
+        desde: {type: string, format: date}
+        hasta: {type: string, format: date}
+        slots:
+          type: array
+          items: {$ref: '#/components/schemas/SlotDisponible'}
 
     CitaRequest:
       type: object
@@ -1191,9 +1511,6 @@ components:
           schema: {$ref: '#/components/schemas/ErrorResponse'}
 
 x-pendientes:
-  - fase: 4
-    endpoints:
-      - /api/v1/portal/disponibilidad
   - fase: 5
     endpoints:
       - /api/v1/portal/citas

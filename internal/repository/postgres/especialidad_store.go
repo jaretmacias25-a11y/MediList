@@ -55,9 +55,10 @@ func (s *EspecialidadStore) ObtenerPorID(ctx context.Context, id int64) (*entiti
 func (s *EspecialidadStore) Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Especialidad, error) {
 	q := especialidadSelect + `
 		WHERE ($1 = '' OR codigo ILIKE '%' || $1 || '%' OR nombre ILIKE '%' || $1 || '%')
+		  AND (NOT $2 OR activa)
 		ORDER BY nombre ASC
-		LIMIT $2 OFFSET $3`
-	rows, err := s.db.Query(ctx, q, opts.Search, opts.Limit, opts.Offset)
+		LIMIT $3 OFFSET $4`
+	rows, err := s.db.Query(ctx, q, opts.Search, opts.SoloActivos, opts.Limit, opts.Offset)
 	if err != nil {
 		return nil, mapError(err)
 	}

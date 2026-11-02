@@ -25,6 +25,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "configuración de seguridad inválida: %v\n", err)
 		os.Exit(1)
 	}
+	clinicLocation, err := cfg.ClinicLocation()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "zona horaria de la clínica inválida: %v\n", err)
+		os.Exit(1)
+	}
 
 	logOutput := io.Writer(os.Stdout)
 	var logFile *observability.RotatingFileWriter
@@ -80,6 +85,8 @@ func main() {
 	pacienteStore := postgres.NewPacienteStore(pool)
 	medicoStore := postgres.NewMedicoStore(pool)
 	citaStore := postgres.NewCitaStore(pool)
+	agendaStore := postgres.NewAgendaStore(pool)
+	catalogoStore := postgres.NewCatalogoStore(pool)
 	usuarioStore := postgres.NewUsuarioStore(pool)
 	rolStore := postgres.NewRolStore(pool)
 	refreshTokenStore := postgres.NewRefreshTokenStore(pool)
@@ -106,6 +113,19 @@ func main() {
 	citaService := service.NewCitaService(citaStore, pacienteStore, medicoStore)
 	portalPacienteService := service.NewPortalPacienteService(pacienteStore)
 	medicoPortalService := service.NewMedicoPortalService(citaStore, pacienteStore)
+	agendaService := service.NewAgendaService(
+		medicoStore, agendaStore, agendaStore,
+		service.AgendaConfig{Location: clinicLocation},
+	)
+	disponibilidadService := service.NewDisponibilidadService(
+		medicoStore, agendaStore,
+		service.DisponibilidadConfig{
+			Location:       clinicLocation,
+			MinNotice:      time.Duration(cfg.PortalMinNoticeHours) * time.Hour,
+			MaxAdvanceDays: cfg.PortalMaxAdvanceDays,
+		},
+	)
+	catalogoService := service.NewCatalogoService(catalogoStore)
 
 	authService := service.NewAuthService(service.AuthConfig{
 		JWTSecret:        cfg.JWTSecret,
@@ -151,6 +171,9 @@ func main() {
 		Cuentas:        cuentaService,
 		PortalPaciente: portalPacienteService,
 		MedicoPortal:   medicoPortalService,
+		Agenda:         agendaService,
+		Catalogo:       catalogoService,
+		Disponibilidad: disponibilidadService,
 		Auditoria:      auditoriaService,
 		AuditoriaStore: auditoriaStore,
 		ActorStore:     actorStore,

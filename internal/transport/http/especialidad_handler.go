@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"medilist/internal/service"
-	"medilist/internal/service/entities"
 )
 
 // EspecialidadHandler expone los endpoints de especialidades.
@@ -25,11 +24,7 @@ func (h *EspecialidadHandler) Crear(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, r, h.logger, err)
 		return
 	}
-	e, err := h.svc.Crear(r.Context(), entities.Especialidad{
-		Codigo:      req.Codigo,
-		Nombre:      req.Nombre,
-		Descripcion: req.Descripcion,
-	})
+	e, err := h.svc.Crear(r.Context(), req.toService())
 	if err != nil {
 		writeServiceError(w, r, h.logger, err)
 		return
@@ -76,12 +71,7 @@ func (h *EspecialidadHandler) Actualizar(w http.ResponseWriter, r *http.Request)
 		writeServiceError(w, r, h.logger, err)
 		return
 	}
-	e, err := h.svc.Actualizar(r.Context(), id, entities.Especialidad{
-		Codigo:      req.Codigo,
-		Nombre:      req.Nombre,
-		Descripcion: req.Descripcion,
-		Version:     req.Version,
-	})
+	e, err := h.svc.Actualizar(r.Context(), id, req.toService())
 	if err != nil {
 		writeServiceError(w, r, h.logger, err)
 		return

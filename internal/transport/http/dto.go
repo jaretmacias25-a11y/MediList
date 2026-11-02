@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"medilist/internal/service"
 	"medilist/internal/service/entities"
 )
 
@@ -79,31 +80,56 @@ func nuevaPersonaResponse(p entities.Persona) personaResponse {
 // ---------------------------------------------------------------------------
 
 type especialidadRequest struct {
-	Codigo      string `json:"codigo"`
-	Nombre      string `json:"nombre"`
-	Descripcion string `json:"descripcion"`
-	Version     int64  `json:"version"`
+	Codigo             string `json:"codigo"`
+	Nombre             string `json:"nombre"`
+	Descripcion        string `json:"descripcion"`
+	RequiereDerivacion *bool  `json:"requiere_derivacion"`
+	Activa             *bool  `json:"activa"`
+	Orden              *int   `json:"orden"`
+	DuracionCitaMin    *int   `json:"duracion_cita_min"`
+	Version            int64  `json:"version"`
+}
+
+func (r especialidadRequest) toService() service.EspecialidadInput {
+	return service.EspecialidadInput{
+		Codigo:             r.Codigo,
+		Nombre:             r.Nombre,
+		Descripcion:        r.Descripcion,
+		RequiereDerivacion: r.RequiereDerivacion,
+		Activa:             r.Activa,
+		Orden:              r.Orden,
+		DuracionCitaMin:    r.DuracionCitaMin,
+		Version:            r.Version,
+	}
 }
 
 type especialidadResponse struct {
-	ID          int64     `json:"id"`
-	Codigo      string    `json:"codigo"`
-	Nombre      string    `json:"nombre"`
-	Descripcion string    `json:"descripcion"`
-	Version     int64     `json:"version"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                 int64     `json:"id"`
+	Codigo             string    `json:"codigo"`
+	Nombre             string    `json:"nombre"`
+	Descripcion        string    `json:"descripcion"`
+	RequiereDerivacion bool      `json:"requiere_derivacion"`
+	Activa             bool      `json:"activa"`
+	Orden              int       `json:"orden"`
+	DuracionCitaMin    int       `json:"duracion_cita_min"`
+	Version            int64     `json:"version"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 func nuevaEspecialidadResponse(e entities.Especialidad) especialidadResponse {
 	return especialidadResponse{
-		ID:          e.ID,
-		Codigo:      e.Codigo,
-		Nombre:      e.Nombre,
-		Descripcion: e.Descripcion,
-		Version:     e.Version,
-		CreatedAt:   e.CreatedAt,
-		UpdatedAt:   e.UpdatedAt,
+		ID:                 e.ID,
+		Codigo:             e.Codigo,
+		Nombre:             e.Nombre,
+		Descripcion:        e.Descripcion,
+		RequiereDerivacion: e.RequiereDerivacion,
+		Activa:             e.Activa,
+		Orden:              e.Orden,
+		DuracionCitaMin:    e.DuracionCitaMin,
+		Version:            e.Version,
+		CreatedAt:          e.CreatedAt,
+		UpdatedAt:          e.UpdatedAt,
 	}
 }
 
@@ -176,19 +202,27 @@ type medicoRequest struct {
 	EspecialidadID  int64          `json:"especialidad_id"`
 	NumeroLicencia  string         `json:"numero_licencia"`
 	TipoProfesional string         `json:"tipo_profesional"`
+	DuracionCitaMin *int           `json:"duracion_cita_min"`
+	Bio             *string        `json:"bio"`
+	FotoURL         *string        `json:"foto_url"`
+	AceptaPortal    *bool          `json:"acepta_portal"`
 	Version         int64          `json:"version"`
 }
 
-func (r medicoRequest) toEntity() (entities.Medico, error) {
+func (r medicoRequest) toService() (service.MedicoInput, error) {
 	persona, err := r.Persona.toEntity()
 	if err != nil {
-		return entities.Medico{}, err
+		return service.MedicoInput{}, err
 	}
-	return entities.Medico{
+	return service.MedicoInput{
 		Persona:         persona,
 		EspecialidadID:  r.EspecialidadID,
 		NumeroLicencia:  r.NumeroLicencia,
 		TipoProfesional: r.TipoProfesional,
+		DuracionCitaMin: r.DuracionCitaMin,
+		Bio:             r.Bio,
+		FotoURL:         r.FotoURL,
+		AceptaPortal:    r.AceptaPortal,
 		Version:         r.Version,
 	}, nil
 }
@@ -200,6 +234,10 @@ type medicoResponse struct {
 	Especialidad    especialidadResponse `json:"especialidad"`
 	NumeroLicencia  string               `json:"numero_licencia"`
 	TipoProfesional string               `json:"tipo_profesional"`
+	DuracionCitaMin int                  `json:"duracion_cita_min"`
+	Bio             string               `json:"bio"`
+	FotoURL         string               `json:"foto_url"`
+	AceptaPortal    bool                 `json:"acepta_portal"`
 	Activo          bool                 `json:"activo"`
 	Version         int64                `json:"version"`
 	CreatedAt       time.Time            `json:"created_at"`
@@ -214,6 +252,10 @@ func nuevoMedicoResponse(m entities.Medico) medicoResponse {
 		Especialidad:    nuevaEspecialidadResponse(m.Especialidad),
 		NumeroLicencia:  m.NumeroLicencia,
 		TipoProfesional: m.TipoProfesional,
+		DuracionCitaMin: m.DuracionCitaMin,
+		Bio:             m.Bio,
+		FotoURL:         m.FotoURL,
+		AceptaPortal:    m.AceptaPortal,
 		Activo:          m.Activo,
 		Version:         m.Version,
 		CreatedAt:       m.CreatedAt,

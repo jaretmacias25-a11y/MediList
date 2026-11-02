@@ -22,6 +22,9 @@ type Dependencies struct {
 	Cuentas        *service.CuentaService
 	PortalPaciente *service.PortalPacienteService
 	MedicoPortal   *service.MedicoPortalService
+	Agenda         *service.AgendaService
+	Catalogo       *service.CatalogoService
+	Disponibilidad *service.DisponibilidadService
 	Auditoria      *service.AuditoriaService
 	AuditoriaStore service.AuditoriaStore
 	ActorStore     service.ActorStore
@@ -91,6 +94,16 @@ func NewRouter(d Dependencies) http.Handler {
 	escritura("PUT /api/v1/medicos/{id}", "medicos:escribir", mh.Actualizar)
 	escritura("DELETE /api/v1/medicos/{id}", "medicos:escribir", mh.Eliminar)
 
+	agh := NewAgendaHandler(d.Agenda, d.Logger)
+	staffRead("GET /api/v1/medicos/{id}/horarios", "agenda:gestionar", "consultar_horarios", "horarios_profesional", agh.ListarHorarios)
+	staffWrite("POST /api/v1/medicos/{id}/horarios", "agenda:gestionar", agh.CrearHorario)
+	staffWrite("PUT /api/v1/medicos/{id}/horarios/{horarioId}", "agenda:gestionar", agh.ActualizarHorario)
+	staffWrite("DELETE /api/v1/medicos/{id}/horarios/{horarioId}", "agenda:gestionar", agh.DesactivarHorario)
+	staffRead("GET /api/v1/medicos/{id}/bloqueos", "agenda:gestionar", "consultar_bloqueos", "bloqueos_agenda", agh.ListarBloqueos)
+	staffWrite("POST /api/v1/medicos/{id}/bloqueos", "agenda:gestionar", agh.CrearBloqueo)
+	staffWrite("PUT /api/v1/medicos/{id}/bloqueos/{bloqueoId}", "agenda:gestionar", agh.ActualizarBloqueo)
+	staffWrite("DELETE /api/v1/medicos/{id}/bloqueos/{bloqueoId}", "agenda:gestionar", agh.EliminarBloqueo)
+
 	ch := NewCitaHandler(d.Citas, d.Logger)
 	staffRead("GET /api/v1/citas", "citas:leer", "consultar_citas", "citas", ch.Listar)
 	staffRead("GET /api/v1/citas/{id}", "citas:leer", "consultar_cita", "citas", ch.Obtener)
@@ -105,6 +118,11 @@ func NewRouter(d Dependencies) http.Handler {
 			http.HandlerFunc(portalHandler.Perfil))))
 	mux.Handle("PUT /api/v1/portal/perfil", auth.Require("portal:perfil:escribir",
 		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalHandler.ActualizarPerfil))))
+
+	catalogoHandler := NewCatalogoHandler(d.Catalogo, d.Disponibilidad, d.Logger)
+	protegido("GET /api/v1/portal/especialidades", "catalogo:leer", catalogoHandler.Especialidades)
+	protegido("GET /api/v1/portal/medicos", "catalogo:leer", catalogoHandler.Medicos)
+	protegido("GET /api/v1/portal/disponibilidad", "portal:citas:leer", catalogoHandler.Disponibilidad)
 
 	medicoPortalHandler := NewMedicoPortalHandler(d.MedicoPortal, d.Logger)
 	mux.Handle("GET /api/v1/medico/agenda", auth.Require("medico:agenda:leer",

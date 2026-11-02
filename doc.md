@@ -2,7 +2,7 @@
 
 > Fecha: 26/10/2026  
 > Alcance: backend Go/PostgreSQL. No incluye frontend.  
-> Estado: Fase 0 cerrada; fases 1–3 completadas; la Fase 4 (catálogo, horarios y disponibilidad) es la siguiente.  
+> Estado: Fase 0 cerrada; fases 1–4 completadas; la Fase 5 (agenda directa del paciente) es la siguiente.
 > Documentos relacionados: `README.md` (estado actual) y `entidades.md` (modelo completo objetivo).
 
 ---
@@ -17,7 +17,7 @@ La base actual ya tiene una parte importante del backend administrativo:
 - control de concurrencia con restricciones de exclusión y versiones optimistas;
 - auditoría, logs estructurados y retención.
 
-La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. Todavía **no existe la disponibilidad calculada, la agenda de portal ni las acciones clínicas del médico**: eso corresponde a las fases 4–8. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
+La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. La **Fase 4 también está implementada**: catálogo administrativo completo, CRUD de horarios/bloqueos, perfil público del médico, cálculo de disponibilidad por zona horaria, antelación y horizonte, y endpoints `/portal/especialidades`, `/portal/medicos` y `/portal/disponibilidad`. Todavía **no existe la agenda directa de portal ni las acciones clínicas del médico**: eso corresponde a las fases 5–8. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
 
 El orden recomendado para concluir el backend es:
 
@@ -25,7 +25,7 @@ El orden recomendado para concluir el backend es:
 2. Crear el modelo de datos y las migraciones.
 3. ~~Implementar registro, verificación de cuenta y vinculación paciente/usuario.~~ (completado)
 4. Implementar autorización por fila: el paciente solo ve lo suyo y el médico solo ve su agenda.
-5. Crear catálogo, horarios y disponibilidad.
+5. ~~Crear catálogo, horarios y disponibilidad.~~ (completado)
 6. Permitir que el paciente agende las cinco áreas de acceso directo.
 7. Implementar el flujo médico mínimo y las derivaciones.
 8. Permitir que el paciente use una derivación para agendar al especialista.
@@ -105,7 +105,7 @@ Pediatría será de **acceso directo para todos**, sin regla por edad. Se implem
 - **Especialidades:** catálogo con 12 registros, flags de acceso directo/derivación y duración por especialidad.
 - **Citas:** creación, consulta, actualización, cambio de estado, filtros y versión optimista.
 - **Concurrencia:** restricciones de exclusión para solapes de médico y paciente en citas `programada`/`confirmada`, horarios recurrentes y bloqueos de agenda; detección de conflictos `23P01`, `40001`, `40P01`, `55P03`.
-- **Disponibilidad (esquema):** tablas `horarios_profesional` y `bloqueos_agenda`; falta el servicio de generación de slots y sus endpoints.
+- **Disponibilidad:** tablas `horarios_profesional` y `bloqueos_agenda`, CRUD administrativo, generación de slots en `CLINIC_TIMEZONE` y endpoints de portal.
 - **Auditoría:** bitácora de acciones y consultas.
 - **Observabilidad:** logs JSON, `trace_id`, `X-Request-ID`, errores en base, retención y stack de Loki/Grafana local.
 - **Cuentas de paciente (Fase 2):** registro transaccional, validación de username/email/documento/edad/términos, rol `paciente`, token de verificación hasheado de un solo uso, reenvío, recuperación y reset de contraseña.
@@ -115,10 +115,10 @@ Pediatría será de **acceso directo para todos**, sin regla por edad. Se implem
 
 ### 2.2 Lo que falta para el flujo solicitado
 
-- **Portal del paciente:** no existen endpoints para perfil propio, catálogo, disponibilidad, citas propias ni derivaciones.
-- **Portal del médico:** no existen endpoints de “mi agenda”, “mi cita”, “marcar atendida” o “emitir derivación”.
-- **Disponibilidad:** las tablas y exclusiones existen; faltan CRUD administrativo, generación de slots, validación al reservar y zona horaria configurable.
-- **Especialidades solicitadas:** `FISIO`, `ODONTO`, `NUTRI` y `OTORRINO` ya están en el catálogo; faltan sus endpoints de portal.
+- **Portal del paciente:** perfil, catálogo y disponibilidad ya existen; faltan citas propias y derivaciones (fases 5 y 7).
+- **Portal del médico:** existe la agenda propia; faltan "mi cita" con acciones, "marcar atendida" y "emitir derivación" (fase 6).
+- **Disponibilidad:** tablas, CRUD administrativo, generación de slots, zona horaria y reglas de antelación/horizonte implementados; la reserva transaccional del slot se completa en la Fase 5.
+- **Especialidades solicitadas:** `FISIO`, `ODONTO`, `NUTRI` y `OTORRINO` están en el catálogo y se exponen en el portal.
 - **Derivaciones:** la tabla, triggers y pruebas de esquema existen; faltan servicio, endpoints, consumo y liberación desde la API.
 - **Autorización por fila:** un médico con `citas:leer` puede consultar todas las citas; el rol paciente existe, pero el patrón actual no está preparado para “solo lo mío”.
 - **Notificaciones transaccionales:** verificación y reset ya tienen correo de desarrollo; faltan recordatorios, confirmaciones y outbox durable.
@@ -1053,13 +1053,14 @@ Validaciones:
 | `POST` | `/pacientes/{id}/transferir` | `pacientes:transferir` | Cambia el médico tratante; exige `medico_destino_id`, motivo y `version` |
 | `GET` | `/pacientes/{id}/transferencias` | `pacientes:transferir` | Historial de transferencias internas |
 | `POST` | `/medicos/{id}/cuenta` | `usuarios:escribir` | Crea/vincula cuenta de médico |
-| `GET` | `/horarios` | `agenda:gestionar` | Lista horarios |
-| `POST` | `/horarios` | `agenda:gestionar` | Crea horario |
-| `PUT` | `/horarios/{id}` | `agenda:gestionar` | Actualiza con `version` |
-| `DELETE` | `/horarios/{id}` | `agenda:gestionar` | Desactiva horario |
-| `GET` | `/bloqueos` | `agenda:gestionar` | Lista bloqueos |
-| `POST` | `/bloqueos` | `agenda:gestionar` | Crea bloqueo |
-| `DELETE` | `/bloqueos/{id}` | `agenda:gestionar` | Elimina/cancela bloqueo |
+| `GET` | `/medicos/{id}/horarios` | `agenda:gestionar` | Lista horarios |
+| `POST` | `/medicos/{id}/horarios` | `agenda:gestionar` | Crea horario |
+| `PUT` | `/medicos/{id}/horarios/{horarioId}` | `agenda:gestionar` | Actualiza con `version` |
+| `DELETE` | `/medicos/{id}/horarios/{horarioId}` | `agenda:gestionar` | Desactiva horario |
+| `GET` | `/medicos/{id}/bloqueos` | `agenda:gestionar` | Lista bloqueos |
+| `POST` | `/medicos/{id}/bloqueos` | `agenda:gestionar` | Crea bloqueo |
+| `PUT` | `/medicos/{id}/bloqueos/{bloqueoId}` | `agenda:gestionar` | Actualiza rango y motivo |
+| `DELETE` | `/medicos/{id}/bloqueos/{bloqueoId}` | `agenda:gestionar` | Elimina/cancela bloqueo |
 | `POST` | `/citas` | `citas:escribir` | Ya existe; recepción/admin agenda |
 | `PATCH` | `/citas/{id}/estado` | `citas:escribir` | Ya existe; administración |
 | `POST` | `/citas/{id}/sobrescribir-derivacion` | `derivaciones:sobrescribir` | Excepción auditada |
@@ -1206,21 +1207,23 @@ Tareas:
 
 ### Fase 4 — Catálogo, horarios y disponibilidad
 
+**Estado:** completada (Paso 8).
+
 **Objetivo:** que el paciente vea opciones reales y slots válidos.
 
 Tareas:
 
-- Actualizar catálogo con `requiere_derivacion`, `activa`, orden y duración.
-- Seed de `FISIO`, `ODONTO`, `NUTRI`, `OTORRINO`.
-- CRUD administrativo de horarios y bloqueos.
-- Perfil visible del médico: especialidad, bio, foto, duración, acepta portal.
-- Generación de slots por rango, zona horaria, antelación y máximo de días.
-- Restar bloqueos y citas activas.
-- `GET /portal/especialidades`, `/portal/medicos`, `/portal/disponibilidad`.
-- Validar que un slot no se pueda reservar fuera de horario.
-- Pruebas de zona horaria, cambios de horario y solapes.
+- [x] Actualizar catálogo con `requiere_derivacion`, `activa`, orden y duración.
+- [x] Seed de `FISIO`, `ODONTO`, `NUTRI`, `OTORRINO`.
+- [x] CRUD administrativo de horarios y bloqueos.
+- [x] Perfil visible del médico: especialidad, bio, foto, duración, acepta portal.
+- [x] Generación de slots por rango, zona horaria, antelación y máximo de días.
+- [x] Restar bloqueos y citas activas.
+- [x] `GET /portal/especialidades`, `/portal/medicos`, `/portal/disponibilidad`.
+- [x] Validar que un slot no se pueda reservar fuera de horario.
+- [x] Pruebas de zona horaria, cambios de horario y solapes.
 
-**Criterio de salida:** los slots mostrados son reservables y no incluyen horarios bloqueados, pasados o ya ocupados. Dos pacientes que reservan el mismo slot producen un solo `201` y un `409`.
+**Criterio de salida:** los slots mostrados son reservables y no incluyen horarios bloqueados, pasados o ya ocupados. La reserva concurrente del mismo slot (un `201` y un `409`) se cierra en la Fase 5, cuando exista el endpoint de reserva.
 
 ### Fase 5 — Agenda directa del paciente
 
@@ -1987,7 +1990,7 @@ Artefactos:
 
 - `migrations/014_pediatria_acceso_directo.sql` aplicada a `medilist` y a una base temporal desde cero; segunda ejecución idempotente (`UPDATE 0`).
 - `internal/repository/postgres/catalogo_migracion_test.go` con `TestMigracionPediatriaAccesoDirecto`.
-- `docs/openapi.yaml` con los endpoints implementados y `x-pendientes` para las fases 4–8; validado con Redocly.
+- `docs/openapi.yaml` con los endpoints implementados y `x-pendientes` para las fases 5–8; validado con Redocly.
 - `README.md`, `doc.md` y `entidades.md` actualizados.
 
 Validación:
@@ -1997,7 +2000,61 @@ Validación:
 - `TestMigracionPediatriaAccesoDirecto` pasa sobre base temporal.
 - La base `medilist` conserva solo el usuario `admin` y el catálogo actualizado; no se agregaron datos clínicos.
 
-**Pendiente inmediato:** Fase 4 (catálogo, horarios y disponibilidad).
+### Paso 8 — Fase 4: catálogo, horarios y disponibilidad
+
+**Estado:** completado.
+
+**Archivos principales:**
+
+- `internal/service/entities/agenda.go`: `HorarioProfesional`, `BloqueoAgenda`, `IntervaloOcupado`, `SlotDisponible` y `Disponibilidad`.
+- `internal/service/agenda_service.go`: CRUD, validación de rangos, solapes y versiones.
+- `internal/service/disponibilidad_service.go`: generación de slots, zona horaria, antelación, horizonte, bloqueos y citas activas.
+- `internal/service/catalogo_service.go`: catálogo público de especialidades y médicos.
+- `internal/repository/postgres/agenda_store.go`: persistencia y consultas de agenda.
+- `internal/repository/postgres/catalogo_store.go`: lecturas públicas del portal.
+- `internal/transport/http/agenda_handler.go`, `catalogo_handler.go`, `agenda_dto.go`: endpoints y DTOs.
+- `internal/config/config.go`: `CLINIC_TIMEZONE`, `PORTAL_MIN_NOTICE_HOURS`, `PORTAL_MAX_ADVANCE_DAYS` y carga embebida de zonas IANA.
+- `docs/openapi.yaml`: contrato de los endpoints de la Fase 4.
+
+**Decisiones de implementación:**
+
+- Los horarios se guardan como hora local `HH:MM`; la conversión a UTC se hace al generar cada slot.
+- Los bloqueos se guardan en UTC y se comparan como intervalos `[inicio, fin)`.
+- Un slot se descarta si empieza antes de `now + PORTAL_MIN_NOTICE_HOURS`, si cae fuera del horizonte, si se cruza con un bloqueo o con una cita `programada`/`confirmada`.
+- Las fechas `desde`/`hasta` son inclusivas; el rango máximo es el horizonte configurado.
+- El portal solo muestra especialidades activas y médicos activos que aceptan portal.
+- El perfil público no expone documento, email, teléfono ni dirección del médico.
+- El CRUD de horarios/bloqueos exige `agenda:gestionar` y la guarda administrativa; las lecturas se auditan y las escrituras pasan por `auditMutations`.
+- `DELETE /medicos/{id}/horarios/{horarioId}` es baja lógica para conservar citas históricas.
+- `ValidarSlot` reutiliza `Consultar` para que la reserva de la Fase 5 solo acepte inicios alineados a un slot generado, con la duración del horario y sin bloqueos/citas activas.
+
+**Pruebas añadidas:**
+
+- `TestDisponibilidadConvierteHoraLocalAUTC`
+- `TestDisponibilidadRestaBloqueosYCitasActivas`
+- `TestDisponibilidadRespetaAntelacionMinima`
+- `TestDisponibilidadRechazaRangoFueraDelHorizonte`
+- `TestDisponibilidadRespetaVigenciaDelHorario`
+- `TestValidarSlotExigeUnSlotGenerado`
+- `TestDisponibilidadNoExponeMedicoInactivoODePortalCerrado`
+- `TestAgendaCrearHorarioValido`
+- `TestAgendaCrearHorarioRechazaSolape`
+- `TestAgendaCrearHorarioRechazaRangoInvalido`
+- `TestAgendaActualizarHorarioExigeVersionVigente`
+- `TestAgendaCrearBloqueoValidaMotivoYSolape`
+- `TestAgendaActualizarBloqueoValidaSolape`
+- `TestAgendaStoreCRUDYConsultasDeDisponibilidad` (integración PostgreSQL)
+- `TestValidateZonaHorariaYHorizonteDelPortal`
+
+**Validación realizada:**
+
+- `gofmt -l .` sin salida.
+- `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan.
+- `TestAgendaStoreCRUDYConsultasDeDisponibilidad` pasa con `TEST_DATABASE_URL` sobre `medilist`.
+- `docs/openapi.yaml` validado con Redocly sin errores de contrato (solo advertencias de estilo).
+- E2E sobre una base temporal migrada desde cero: se creó un médico y un horario, `/portal/disponibilidad` devolvió 2 slots en UTC, un bloqueo dejó 1, un solape de horario y un `version` obsoleto devolvieron `409`, la actualización correcta devolvió `200`, y al eliminar bloqueo/horario la disponibilidad volvió a 4/0 slots. La base temporal se eliminó al finalizar.
+
+**Pendiente inmediato:** Fase 5 (agenda directa del paciente y reserva transaccional del slot).
 
 
 
