@@ -138,9 +138,13 @@ func (s *PortalCitaService) Crear(
 	}
 	slot, err := s.slots.ValidarSlot(ctx, medico.ID, in.FechaHoraInicio, 0)
 	if err != nil {
+		if errors.Is(err, entities.ErrConflict) {
+			observability.IncConflictoSlot()
+		}
 		return nil, err
 	}
 	if slot == nil || slot.DuracionMin <= 0 {
+		observability.IncConflictoSlot()
 		return nil, fmt.Errorf("%w: el slot no está disponible", entities.ErrConflict)
 	}
 

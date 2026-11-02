@@ -2,7 +2,7 @@
 
 Backend en **Go** para la gestión de pacientes, médicos, especialidades y citas de una clínica. Implementa una **arquitectura limpia por capas** con persistencia en **PostgreSQL**, autenticación **JWT**, control de acceso basado en roles (**RBAC**), cuentas de paciente con verificación de email, vinculación con historias existentes y auditoría de seguridad.
 
-El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente, la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, la Fase 5 de agenda directa, la Fase 6 de flujo médico/derivaciones/transferencia interna, la Fase 7 de reserva de especialista con derivación, la Fase 8 de notificaciones (outbox transaccional, worker con reintentos/backoff, plantillas, recordatorios, preferencias y proveedor SMTP) y la Fase 9 de endurecimiento (rate limiting distribuido, CORS, HSTS, métricas y runbook). El procedimiento operativo está en [docs/runbook.md](./docs/runbook.md).
+El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente, la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, la Fase 5 de agenda directa, la Fase 6 de flujo médico/derivaciones/transferencia interna, la Fase 7 de reserva de especialista con derivación, la Fase 8 de notificaciones (outbox transaccional, worker con reintentos/backoff, plantillas, recordatorios, preferencias y proveedor SMTP), la Fase 9 de endurecimiento (rate limiting distribuido, CORS, HSTS, métricas y runbook) y la Fase 10 de cierre local (feature flags, CI, E2E de staging local, revisión de dependencias y OpenAPI 1.0.0). El procedimiento operativo está en [docs/runbook.md](./docs/runbook.md).
 
 ---
 
@@ -107,7 +107,7 @@ MediList/
 │       ├── cuenta_dto.go               # contratos de registro y vinculación
 │       └── *_handler.go                # endpoints
 ├── docs/
-│   ├── openapi.yaml                    # contrato OpenAPI hasta Fase 9
+│   ├── openapi.yaml                    # contrato OpenAPI hasta Fase 10 (1.0.0)
 │   └── runbook.md                      # TLS, backups, incidentes y carga
 ├── migrations/
 │   ├── 001_init.sql                    # tablas clínicas, índices y triggers
@@ -133,7 +133,9 @@ MediList/
 │   ├── loki/loki-config.yml
 │   ├── promtail/promtail-config.yml
 │   └── grafana/provisioning/           # datasource, dashboard y reglas
+├── .github/workflows/ci.yml            # CI: formato, build, tests, OpenAPI, Compose y vulnerabilidades
 ├── scripts/
+│   ├── e2e_fase10.ps1                  # E2E de staging local con feature flags
 │   ├── migrate.ps1                     # crea BD y aplica migraciones
 │   ├── observability.ps1               # levanta/consulta el stack local
 │   ├── prueba_concurrencia_disponibilidad.ps1 # prueba horarios/bloqueos concurrentes
@@ -153,7 +155,7 @@ MediList/
 
 ## Requisitos
 
-- Go **1.26** o superior.
+- Go **1.27.3** o superior (incluye correcciones de seguridad de `net/http` y `crypto/x509`).
 - PostgreSQL **15** o superior en `localhost:5432`.
 - Usuario local de PostgreSQL con permisos para crear y usar la base `medilist`.
 - Docker Desktop con motor Linux (opcional, solo para el stack local de observabilidad).
@@ -216,6 +218,10 @@ MediList/
    PORTAL_CANCEL_CUTOFF_HOURS=24
    AUTO_CONFIRM_PORTAL_BOOKINGS=true
    REFERRAL_VALID_DAYS=90
+   # Feature flags; en producción inician apagadas y se activan gradualmente.
+   PORTAL_PACIENTE_ENABLED=true
+   DERIVACIONES_ENABLED=true
+   TRANSFERENCIAS_PACIENTE_ENABLED=true
 
    # Outbox y recordatorios.
    NOTIFICATION_INTERVAL_SECONDS=30
@@ -310,6 +316,30 @@ La migración crea un administrador:
 | `admin` | `Admin12345!2026` |
 
 **Cambia esta contraseña inmediatamente** con `POST /api/v1/auth/password` o mediante `PUT /api/v1/usuarios/1`. El hash bcrypt se almacena en la base; la contraseña nunca se devuelve por la API.
+
+### Feature flags
+
+| Variable | Desarrollo | Producción inicial | Rutas afectadas |
+|---|---:|---:|---|
+| `PORTAL_PACIENTE_ENABLED` | `true` | `false` | perfil, preferencias, catálogo, disponibilidad, citas y derivaciones del portal |
+| `DERIVACIONES_ENABLED` | `true` | `false` | emisión/listado de derivaciones y excepción administrativa |
+| `TRANSFERENCIAS_PACIENTE_ENABLED` | `true` | `false` | transferencia interna e historial de paciente |
+
+Si una ruta está apagada devuelve `503` con código `feature_disabled`; no se ejecuta autenticación ni lógica clínica. El orden de activación recomendado es:
+
+1. desplegar con las tres flags en `false`;
+2. ejecutar smoke tests de salud, login y administración;
+3. activar `PORTAL_PACIENTE_ENABLED` y probar el portal;
+4. activar `DERIVACIONES_ENABLED` y ejecutar el E2E de derivaciones;
+5. activar `TRANSFERENCIAS_PACIENTE_ENABLED` cuando recepción esté capacitada.
+
+El E2E local de staging se ejecuta con:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e_fase10.ps1 -Password "TU_PASSWORD_LOCAL"
+```
+
+Crea una base temporal, valida las flags apagadas, activa el flujo completo y elimina la base al terminar.
 
 ---
 
@@ -916,6 +946,7 @@ Códigos:
 | `409` | Conflicto (documento duplicado, solicitud ya resuelta, solape de agenda) |
 | `423` | Cuenta bloqueada temporalmente |
 | `429` | Demasiadas solicitudes; incluye `Retry-After` |
+| `503` | Dependencia no disponible o `feature_disabled` por flag apagada |
 | `500` | Error interno |
 
 El registro devuelve `201` para una historia nueva y `202` cuando crea una solicitud de vinculación. El reenvío y la solicitud de reset devuelven `202` aunque la cuenta no exista, para no filtrar información.
@@ -1010,6 +1041,14 @@ go vet ./...
 go test -count=1 ./...
 ```
 
+La integración continua está en `.github/workflows/ci.yml`: aplica las migraciones sobre PostgreSQL, ejecuta formato, build, vet, pruebas unitarias/integración, carrera en servicios/HTTP, valida OpenAPI, valida Compose y ejecuta `govulncheck`.
+
+E2E de staging local con feature flags, registro/verificación, reserva, atención, nota, derivación y reserva de especialista:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e_fase10.ps1 -Password "TU_PASSWORD_LOCAL"
+```
+
 Pruebas de persistencia y concurrencia sobre una base temporal creada desde cero:
 
 ```powershell
@@ -1063,7 +1102,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_carga_fase9
 Agrega `-Reservar` para probar también la creación de citas; los `409` por el
 mismo slot son esperados. El E2E de Fase 9 verificó health, HSTS, `/metrics`,
 preflight CORS permitido/denegado, login real y `429` en el intento 61 de
-refresh. También se probó un backup `pg_dump`/`pg_restore` en una base aislada: 24 tablas restauradas, incluida `rate_limit_buckets` y `notificaciones_outbox`.
+refresh. La prueba de carga sobre una base temporal (3 workers × 5 iteraciones)
+terminó con 15/15 logins, 15/15 consultas de disponibilidad, 1 reserva,
+14 conflictos `409` y 0 errores;
+las métricas reflejaron `reservas=1` y `conflictos_slot=14`, y el outbox envió
+las notificaciones sin fallos. También se probó un backup
+`pg_dump`/`pg_restore` en una base aislada: 24 tablas restauradas, incluidas
+`rate_limit_buckets` y `notificaciones_outbox`.
+
+El stack de observabilidad se validó con Loki `ready`, Grafana 11.6.0,
+Promtail `1/1 ready`, datasource y dashboard cargados, y 6 reglas de alerta con
+`health=ok`. Una línea `ERROR` sintética disparó la alerta y el webhook llegó a
+`alert-sink`; el archivo sintético se eliminó después de la prueba.
+
+Las pruebas de la Fase 10 cubren:
+
+- feature flags apagadas: portal, derivaciones y transferencias devuelven `503 feature_disabled`;
+- E2E desde base vacía: registro, verificación, reserva directa, atención, nota, derivación y reserva de especialista;
+- CI con PostgreSQL, migraciones, tests, carrera, OpenAPI, Compose y `govulncheck`;
+- revisión de dependencias con Go 1.27.3 y 0 vulnerabilidades alcanzables.
 
 Las pruebas de la Fase 7 cubren:
 
@@ -1192,6 +1249,7 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 - **Datos en tránsito y caché:** `Cache-Control: no-store`, `Pragma: no-cache`, CSP, `X-Frame-Options: DENY`, `nosniff`, `Cross-Origin-Resource-Policy`, política de permisos restrictiva y HSTS configurable con `HSTS_ENABLED`.
 - **CORS:** allowlist exacta con `CORS_ALLOWED_ORIGINS`; los preflight se responden antes de autenticar. `*` se rechaza en producción.
 - **Proxy inverso:** `TRUSTED_PROXIES` permite aceptar `X-Forwarded-For`/`X-Real-IP` solo desde CIDR o IP de confianza; sin esa configuración se usa `RemoteAddr` y no se puede falsificar la IP.
+- **Feature flags:** portal, derivaciones y transferencias se activan por entorno; una ruta apagada responde `503 feature_disabled` antes de autenticar.
 - **Entradas:** límite de cuerpo JSON de 1 MiB, `DisallowUnknownFields`, consultas SQL parametrizadas y traducción de errores de longitud/formato a `400`.
 - **Secretos:** `.env` está en `.gitignore`; usa `.env.example` como plantilla. No versiones `*.pem`, `*.key` ni credenciales SMTP.
 - **Sesiones:** al desactivar una cuenta, cambiar roles, cambiar contraseña o llamar a `revocar-sesiones` se incrementa `token_version`; el access token anterior falla de inmediato y los refresh tokens quedan revocados.

@@ -1,10 +1,13 @@
 openapi: 3.1.0
 info:
   title: MediList API
-  version: 0.10.0
+  version: 1.0.0
   description: |
-    Contrato de los endpoints implementados hasta la Fase 9. El roadmap de
+    Contrato de los endpoints implementados hasta la Fase 10. El roadmap de
     endurecimiento y despliegue está en doc.md y docs/runbook.md.
+
+    Las rutas de portal, derivaciones y transferencias pueden devolver 503 con
+    código feature_disabled cuando su feature flag está apagada.
 
     Convenciones:
     - Respuestas exitosas: {"data": ...} o {"data": [...], "meta": {...}}.
@@ -16,6 +19,10 @@ servers:
     description: API local
 security:
   - bearerAuth: []
+x-feature-flags:
+  PORTAL_PACIENTE_ENABLED: Portal del paciente, perfil, catálogo, citas y derivaciones.
+  DERIVACIONES_ENABLED: Emisión, consulta y excepción administrativa de derivaciones.
+  TRANSFERENCIAS_PACIENTE_ENABLED: Transferencia interna e historial del paciente.
 tags:
   - name: Salud
   - name: Autenticación
@@ -1995,6 +2002,12 @@ components:
         Retry-After:
           description: Segundos recomendados antes de reintentar.
           schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+
+    FeatureDisabled:
+      description: Funcionalidad deshabilitada por feature flag en este entorno.
       content:
         application/json:
           schema: {$ref: '#/components/schemas/ErrorResponse'}

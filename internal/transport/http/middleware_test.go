@@ -172,6 +172,35 @@ func TestRateLimitMiddlewareDevuelve429(t *testing.T) {
 	}
 }
 
+func TestFeatureFlagDeshabilitadoDevuelve503(t *testing.T) {
+	handler := featureFlag(false, "portal del paciente",
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/portal/perfil", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("estado esperado 503, obtenido %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "feature_disabled") {
+		t.Fatalf("código de error inesperado: %s", rec.Body.String())
+	}
+}
+
+func TestFeatureFlagHabilitadoPasaAlHandler(t *testing.T) {
+	handler := featureFlag(true, "portal del paciente",
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/portal/perfil", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("estado esperado 204, obtenido %d", rec.Code)
+	}
+}
+
 func TestMetricsHandlerExponeContadores(t *testing.T) {
 	observability.IncReserva()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)

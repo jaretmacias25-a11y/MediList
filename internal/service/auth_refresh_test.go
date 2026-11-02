@@ -40,9 +40,12 @@ type fakeRefreshStore struct {
 	revocados  int
 }
 
-func (f *fakeRefreshStore) BuscarPorHash(context.Context, string) (*entities.RefreshToken, error) {
+func (f *fakeRefreshStore) BuscarPorHash(_ context.Context, hash string) (*entities.RefreshToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.token.TokenHash != hash {
+		return nil, entities.ErrNotFound
+	}
 	copia := f.token
 	return &copia, nil
 }
@@ -56,7 +59,6 @@ func (f *fakeRefreshStore) Rotar(_ context.Context, id int64, nuevo *entities.Re
 	ahora := time.Now()
 	f.token.RevocadoEn = &ahora
 	nuevo.ID = f.token.ID + 1
-	f.token = *nuevo
 	f.rotaciones++
 	return true, nil
 }

@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: medilist
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/medilist?sslmode=disable
+      PGPASSWORD: postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: true
+
+      - name: Dependencias
+        run: go mod download
+
+      - name: Formato
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: Compilar
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Instalar cliente PostgreSQL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Aplicar migraciones
+        run: |
+          for archivo in migrations/*.sql; do
+            echo "Aplicando ${archivo}..."
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$archivo"
+          done
+
+      - name: Pruebas unitarias e integración
+        run: go test -count=1 ./...
+
+      - name: Pruebas de carrera en servicios y HTTP
+        run: go test -race -count=1 ./internal/service ./internal/transport/http
+
+      - name: Validar OpenAPI
+        run: npx --yes @redocly/cli lint docs/openapi.yaml --max-problems 500
+
+      - name: Validar Compose
+        run: docker compose -f deploy/observability/docker-compose.yml config > /dev/null
+
+      - name: Verificar módulos
+        run: go mod verify
+
+      - name: Revisión de vulnerabilidades
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

@@ -2,7 +2,7 @@
 
 > Fecha: 26/10/2026  
 > Alcance: backend Go/PostgreSQL. No incluye frontend.  
-> Estado: Fase 0 cerrada; fases 1–9 completadas; la Fase 10 (pruebas finales, despliegue y documentación) es la siguiente.
+> Estado: Fase 0 cerrada; fases 1-10 completadas en local; falta ejecutar el staging real y la activación gradual de flags.
 > Documentos relacionados: `README.md` (estado actual) y `entidades.md` (modelo completo objetivo).
 
 ---
@@ -425,7 +425,7 @@ Variables propuestas:
 ```env
 PORTAL_PACIENTE_ENABLED=true
 DERIVACIONES_ENABLED=true
-TRANSFERENCIAS_PACIENTE_ENABLED=false
+TRANSFERENCIAS_PACIENTE_ENABLED=true
 CLINIC_TIMEZONE=America/Guayaquil
 PORTAL_MIN_NOTICE_HOURS=2
 PORTAL_MAX_ADVANCE_DAYS=90
@@ -1530,7 +1530,7 @@ Una historia no está terminada si:
 - [x] Redacción de PII en logs (sin cuerpos, tokens ni notas clínicas).
 - [x] Consentimiento y términos versionados.
 - [x] Backups y restauración probados en una base aislada (24 tablas, incluida `rate_limit_buckets`).
-- [ ] Revisión de dependencias y contenedores (se hará en la Fase 10).
+- [x] Revisión de dependencias (`govulncheck`) y configuración de contenedores (`docker compose config`).
 
 ### 9.2 Eventos de auditoría nuevos
 
@@ -1630,9 +1630,9 @@ La Fase 2 registra `registro`, `registro_fallido`, `verificacion_email`, `verifi
 - [ ] No hay IDOR en los flujos anteriores.
 - [ ] Las carreras devuelven `409`, no `500`.
 - [ ] Migraciones probadas desde cero y sobre base actual.
-- [ ] OpenAPI y README actualizados.
+- [x] OpenAPI 1.0.0 y README actualizados con feature flags, CI y E2E.
 - [ ] Auditoría y métricas de los eventos nuevos.
-- [ ] Pruebas unitarias, integración, E2E, concurrencia y seguridad en CI.
+- [x] Pruebas unitarias, integración, concurrencia y seguridad en CI; E2E local ejecutado y workflow preparado para la primera ejecución en GitHub.
 
 ---
 
@@ -2357,8 +2357,41 @@ No requiere migración nueva: reutiliza las columnas `canal`, `creada_por_usuari
 - `docs/openapi.yaml` actualizado con `/metrics` y versión 0.10.0; Redocly lo valida sin errores de contrato.
 - E2E HTTP: health, HSTS, `/metrics`, preflight CORS permitido/denegado, login y `429` distribuido en el intento 61 de refresh.
 - Backup/restauración en base aislada: 24 tablas restauradas, incluidas `rate_limit_buckets` y `notificaciones_outbox`.
-- El stack Docker de observabilidad no se pudo levantar porque el motor de Docker Desktop estaba detenido; las reglas de alerta quedaron validadas como YAML y se activarán al iniciar el stack.
+- Stack Docker validado: Loki `ready`, Grafana `11.6.0`, Promtail `1/1 ready`, datasource Loki, dashboard y 6 reglas de alerta cargadas con `health=ok`.
+- Logs en vivo de la API llegaron a Loki (health, metrics y solicitudes) y una línea `ERROR` sintética disparó la alerta; el webhook llegó a `alert-sink` con estado `firing`.
+- Prueba de carga sobre base temporal (3 workers × 5 iteraciones): 15/15 logins, 15/15 consultas de disponibilidad, 1 reserva exitosa, 14 conflictos `409`, 0 errores; métricas `reservas=1`, `conflictos_slot=14` y outbox enviado correctamente.
+- La prueba de carga detectó y corrigió dos detalles: las fechas de disponibilidad deben enviarse como `YYYY-MM-DD` y la métrica de conflictos también cuenta los rechazos de `ValidarSlot`.
 
-**Pendiente inmediato:** Fase 10 (pruebas finales, despliegue y documentación).
+### Paso 14 — Fase 10: pruebas finales, despliegue y documentación
+
+**Estado:** completada localmente; queda ejecutar el mismo procedimiento en el staging real.
+
+**Archivos principales:**
+
+- `internal/config/config.go`: flags `PORTAL_PACIENTE_ENABLED`, `DERIVACIONES_ENABLED` y `TRANSFERENCIAS_PACIENTE_ENABLED`.
+- `internal/transport/http/router.go`: gating de rutas de portal, derivaciones y transferencias con `feature_disabled` (`503`).
+- `.github/workflows/ci.yml`: CI con PostgreSQL, migraciones, tests, carrera, OpenAPI, Compose y `govulncheck`.
+- `scripts/e2e_fase10.ps1`: E2E de staging local desde base vacía.
+- `go.mod`: Go 1.27.3 para incorporar las correcciones de seguridad de la stdlib.
+- `README.md` y `doc.md`: flags, despliegue, E2E y criterios de release.
+
+**Reglas y controles implementados:**
+
+- En producción las flags inician apagadas y se activan por entorno; una ruta apagada devuelve `503 feature_disabled` antes de autenticar.
+- El E2E valida flags apagadas, flags activas, registro/verificación, reserva directa, atención, nota, derivación y reserva de especialista.
+- La CI aplica todas las migraciones sobre PostgreSQL 16 y ejecuta la suite completa.
+- `govulncheck` no encontró vulnerabilidades alcanzables con Go 1.27.3.
+- `docker compose config` valida el stack de observabilidad.
+
+**Validación realizada:**
+
+- `gofmt -l .` sin salida; `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan.
+- `scripts/e2e_fase10.ps1` pasó sobre base temporal desde cero: flags apagadas `503`, luego paciente verificado, cita directa, atención, nota, derivación y cita de especialista.
+- `go mod verify` correcto.
+- `govulncheck ./...`: 0 vulnerabilidades alcanzables.
+- `docker compose -f deploy/observability/docker-compose.yml config` correcto.
+- OpenAPI validado con Redocly.
+
+**Pendiente inmediato:** ejecutar el E2E y los smoke tests en el staging real, con backup previo y activación gradual de flags.
 
 

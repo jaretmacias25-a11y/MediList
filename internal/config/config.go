@@ -65,6 +65,10 @@ type Config struct {
 	AutoConfirmPortalBookings bool
 	ReferralValidDays         int
 
+	PortalPacienteEnabled bool
+	DerivacionesEnabled   bool
+	TransferenciasEnabled bool
+
 	NotificationIntervalSeconds int
 	NotificationBatchSize       int
 	NotificationMaxAttempts     int
@@ -129,6 +133,10 @@ func Load() Config {
 		PortalCancelCutoffHours:   getenvInt("PORTAL_CANCEL_CUTOFF_HOURS", 24),
 		AutoConfirmPortalBookings: getenvBool("AUTO_CONFIRM_PORTAL_BOOKINGS", true),
 		ReferralValidDays:         getenvInt("REFERRAL_VALID_DAYS", 90),
+
+		PortalPacienteEnabled: getenvBool("PORTAL_PACIENTE_ENABLED", env != "production"),
+		DerivacionesEnabled:   getenvBool("DERIVACIONES_ENABLED", env != "production"),
+		TransferenciasEnabled: getenvBool("TRANSFERENCIAS_PACIENTE_ENABLED", env != "production"),
 
 		NotificationIntervalSeconds: getenvInt("NOTIFICATION_INTERVAL_SECONDS", 30),
 		NotificationBatchSize:       getenvInt("NOTIFICATION_BATCH_SIZE", 50),

@@ -47,6 +47,9 @@ func configValidaParaPruebas() Config {
 		PortalCancelCutoffHours:   24,
 		AutoConfirmPortalBookings: true,
 		ReferralValidDays:         90,
+		PortalPacienteEnabled:     true,
+		DerivacionesEnabled:       true,
+		TransferenciasEnabled:     true,
 
 		NotificationIntervalSeconds: 30,
 		NotificationBatchSize:       50,
@@ -78,6 +81,17 @@ func TestValidateRechazaInstanciaYRetencionInvalidas(t *testing.T) {
 	cfg.AuditRetention = 10 * 24 * time.Hour
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("la retención de auditoría menor a 30 días debe rechazarse")
+	}
+}
+
+func TestLoadApagaFeatureFlagsEnProduccion(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("PORTAL_PACIENTE_ENABLED", "")
+	t.Setenv("DERIVACIONES_ENABLED", "")
+	t.Setenv("TRANSFERENCIAS_PACIENTE_ENABLED", "")
+	cfg := Load()
+	if cfg.PortalPacienteEnabled || cfg.DerivacionesEnabled || cfg.TransferenciasEnabled {
+		t.Fatalf("las flags deben iniciar apagadas en producción: %+v", cfg)
 	}
 }
 

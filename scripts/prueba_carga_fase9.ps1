@@ -42,10 +42,10 @@ if ($MedicoID -le 0) {
     $MedicoID = [long]$medicos.data[0].id
 }
 
-$desde = (Get-Date).ToUniversalTime().AddDays(1).ToString("yyyy-MM-ddTHH:mm:ssZ")
-$hasta = (Get-Date).ToUniversalTime().AddDays(7).ToString("yyyy-MM-ddTHH:mm:ssZ")
+$desde = (Get-Date).AddDays(1).ToString("yyyy-MM-dd")
+$hasta = (Get-Date).AddDays(7).ToString("yyyy-MM-dd")
 $disponibilidad = Invoke-RestMethod -Method Get `
-    -Uri "$base/api/v1/portal/disponibilidad?medico_id=$MedicoID&desde=$([uri]::EscapeDataString($desde))&hasta=$([uri]::EscapeDataString($hasta))" `
+    -Uri "$base/api/v1/portal/disponibilidad?medico_id=$MedicoID&desde=$desde&hasta=$hasta" `
     -Headers $headers
 if (-not $disponibilidad.data.slots -or $disponibilidad.data.slots.Count -eq 0) {
     throw "No hay slots en los próximos 7 días para el médico $MedicoID. Ajusta la agenda de staging."
@@ -94,10 +94,10 @@ $jobs = 1..$Concurrencia | ForEach-Object {
             $headers = @{ Authorization = "Bearer $token" }
             $sw = [Diagnostics.Stopwatch]::StartNew()
             try {
-                $desde = (Get-Date).ToUniversalTime().AddDays(1).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                $hasta = (Get-Date).ToUniversalTime().AddDays(7).ToString("yyyy-MM-ddTHH:mm:ssZ")
+                $desde = (Get-Date).AddDays(1).ToString("yyyy-MM-dd")
+                $hasta = (Get-Date).AddDays(7).ToString("yyyy-MM-dd")
                 $null = Invoke-RestMethod -Method Get `
-                    -Uri "$base/api/v1/portal/disponibilidad?medico_id=$medicoID&desde=$([uri]::EscapeDataString($desde))&hasta=$([uri]::EscapeDataString($hasta))" `
+                    -Uri "$base/api/v1/portal/disponibilidad?medico_id=$medicoID&desde=$desde&hasta=$hasta" `
                     -Headers $headers
                 $r.disponibilidad_ok++
             } catch {
@@ -112,7 +112,7 @@ $jobs = 1..$Concurrencia | ForEach-Object {
                     $body = @{
                         medico_id = $medicoID
                         fecha_hora_inicio = $slot
-                        tipo = "consulta"
+                        tipo = "primera_vez"
                         motivo = "prueba de carga Fase 9"
                     } | ConvertTo-Json
                     $null = Invoke-RestMethod -Method Post `
@@ -147,4 +147,18 @@ $resumen = [ordered]@{
     reserva_error = ($resultados | Measure-Object -Property reserva_error -Sum).Sum
 }
 $resumen.GetEnumerator() | ForEach-Object { "{0}={1}" -f $_.Key, $_.Value }
+
+function Get-Percentil {
+    param([int[]]$Valores, [double]$Percentil)
+    if (-not $Valores -or $Valores.Count -eq 0) { return 0 }
+    $ordenados = @($Valores | Sort-Object)
+    $indice = [Math]::Ceiling(($Percentil / 100) * $ordenados.Count) - 1
+    if ($indice -lt 0) { $indice = 0 }
+    return $ordenados[$indice]
+}
+
+$latenciaLogin = @($resultados | ForEach-Object { $_.latencia_login_ms } | ForEach-Object { [int]$_ })
+$latenciaDisponibilidad = @($resultados | ForEach-Object { $_.latencia_disponibilidad_ms } | ForEach-Object { [int]$_ })
+Write-Output ("login_p50_ms={0} login_p95_ms={1}" -f (Get-Percentil $latenciaLogin 50), (Get-Percentil $latenciaLogin 95))
+Write-Output ("disponibilidad_p50_ms={0} disponibilidad_p95_ms={1}" -f (Get-Percentil $latenciaDisponibilidad 50), (Get-Percentil $latenciaDisponibilidad 95))
 Write-Host "Prueba terminada. Revisa /metrics, logs y outbox antes de cerrar la validación."

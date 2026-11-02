@@ -50,6 +50,9 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 HSTS_ENABLED=true
 METRICS_ENABLED=true
 RATE_LIMIT_ENABLED=true
+PORTAL_PACIENTE_ENABLED=false
+DERIVACIONES_ENABLED=false
+TRANSFERENCIAS_PACIENTE_ENABLED=false
 ```
 
 Reglas:
@@ -65,6 +68,8 @@ Reglas:
 - `TRUSTED_PROXIES` solo debe contener las redes del proxy. Si queda vacío,
   `X-Forwarded-For` se ignora y el rate limit usa `RemoteAddr`; esto es seguro
   pero hará que todos los clientes detrás de un proxy compartan la IP del proxy.
+- Las flags de portal, derivaciones y transferencias se activan después de los
+  smoke tests; una ruta apagada responde `503 feature_disabled`.
 
 ## 3. TLS, HSTS y proxy inverso
 
@@ -226,15 +231,24 @@ restauró no se considera verificado.
 
 1. Haz backup verificable y anota la versión actual.
 2. Aplica migraciones aditivas en orden (`018_rate_limit.sql` es aditiva).
-3. Despliega la nueva API y espera el health check.
-4. Verifica `/metrics`, un login, disponibilidad, una reserva de prueba y el
-   worker de outbox.
-5. Revisa logs de `level=ERROR`, alertas y outbox pendiente.
+3. Despliega la API con `PORTAL_PACIENTE_ENABLED=false`,
+   `DERIVACIONES_ENABLED=false` y `TRANSFERENCIAS_PACIENTE_ENABLED=false`.
+4. Verifica health, `/metrics`, login administrativo y worker de outbox.
+5. Activa `PORTAL_PACIENTE_ENABLED` y ejecuta el smoke test del portal.
+6. Activa `DERIVACIONES_ENABLED` y ejecuta el E2E de derivaciones.
+7. Activa `TRANSFERENCIAS_PACIENTE_ENABLED` cuando recepción esté capacitada.
+8. Revisa logs de `level=ERROR`, alertas y outbox pendiente.
+
+Antes de tocar staging, ensaya el flujo completo en local con
+`scripts/e2e_fase10.ps1`; usa una base temporal y no requiere datos reales.
 
 Rollback:
 
 - La aplicación puede volver a la versión anterior; las migraciones de Fase 9
   no eliminan columnas ni datos.
+- Ante un incidente, apaga primero las flags (`PORTAL_PACIENTE_ENABLED`,
+  `DERIVACIONES_ENABLED`, `TRANSFERENCIAS_PACIENTE_ENABLED`) para retirar el
+  tráfico sin borrar datos.
 - No hagas `DROP TABLE rate_limit_buckets` durante un rollback normal; la tabla
   es compatible y evita perder la ventana compartida.
 - Si una migración falla o hay corrupción, restaura el backup en una base nueva

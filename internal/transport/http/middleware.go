@@ -68,6 +68,16 @@ func securityHeaders(hsts bool, next http.Handler) http.Handler {
 	})
 }
 
+func featureFlag(enabled bool, nombre string, next http.Handler) http.Handler {
+	if enabled {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusServiceUnavailable, "feature_disabled",
+			"la funcionalidad "+nombre+" no está habilitada")
+	})
+}
+
 func corsMiddleware(allowedOrigins []string, next http.Handler) http.Handler {
 	if len(allowedOrigins) == 0 {
 		return next
