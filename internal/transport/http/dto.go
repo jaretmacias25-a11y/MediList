@@ -164,6 +164,7 @@ func (r pacienteRequest) toEntity() (entities.Paciente, error) {
 type pacienteResponse struct {
 	ID                         int64           `json:"id"`
 	UsuarioID                  *int64          `json:"usuario_id,omitempty"`
+	MedicoResponsableID        *int64          `json:"medico_responsable_id,omitempty"`
 	Persona                    personaResponse `json:"persona"`
 	NumeroHistoria             string          `json:"numero_historia"`
 	GrupoSanguineo             string          `json:"grupo_sanguineo"`
@@ -180,6 +181,7 @@ func nuevoPacienteResponse(p entities.Paciente) pacienteResponse {
 	return pacienteResponse{
 		ID:                         p.ID,
 		UsuarioID:                  p.UsuarioID,
+		MedicoResponsableID:        p.MedicoResponsableID,
 		Persona:                    nuevaPersonaResponse(p.Persona),
 		NumeroHistoria:             p.NumeroHistoria,
 		GrupoSanguineo:             p.GrupoSanguineo,

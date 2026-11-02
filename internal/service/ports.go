@@ -130,13 +130,73 @@ type SlotValidator interface {
 	) (*entities.SlotDisponible, error)
 }
 
+// NotaCitaStore es el puerto de la nota mínima de consulta.
+type NotaCitaStore interface {
+	ObtenerPorCita(ctx context.Context, citaID int64) (*entities.NotaCita, error)
+	Crear(ctx context.Context, n *entities.NotaCita) error
+	Actualizar(ctx context.Context, n *entities.NotaCita) error
+}
+
+// DerivacionStore es el puerto de persistencia de derivaciones clínicas.
+type DerivacionStore interface {
+	Crear(ctx context.Context, d *entities.Derivacion) error
+	ObtenerPorID(ctx context.Context, id int64) (*entities.Derivacion, error)
+	ListarPorMedicoOrigen(
+		ctx context.Context,
+		medicoID int64,
+		opts entities.ListOptions,
+	) ([]entities.Derivacion, error)
+	ListarPorPaciente(
+		ctx context.Context,
+		pacienteID int64,
+		opts entities.ListOptions,
+	) ([]entities.Derivacion, error)
+	MarcarVencidas(ctx context.Context, ahora time.Time) error
+}
+
+// TransferenciaStore es el puerto transaccional de transferencia interna de
+// pacientes y su historial.
+// ExcepcionDerivacionStore es el puerto de autorizaciones administrativas
+// excepcionales para citas de especialista sin derivación clínica.
+type ExcepcionDerivacionStore interface {
+	Crear(ctx context.Context, e *entities.ExcepcionDerivacion) error
+	ObtenerPorCita(ctx context.Context, citaID int64) (*entities.ExcepcionDerivacion, error)
+}
+
+type TransferenciaStore interface {
+	Transferir(
+		ctx context.Context,
+		pacienteID, medicoNuevoID int64,
+		motivo string,
+		actorID int64,
+		version int64,
+	) (*entities.TransferenciaPaciente, error)
+	ListarTransferencias(
+		ctx context.Context,
+		pacienteID int64,
+	) ([]entities.TransferenciaPaciente, error)
+}
+
 // CitaStore es el puerto que debe implementar el repositorio.
 type CitaStore interface {
 	Crear(ctx context.Context, c *entities.Cita) error
+	CrearConDerivacion(ctx context.Context, c *entities.Cita, derivacionID int64) error
 	ObtenerPorID(ctx context.Context, id int64) (*entities.Cita, error)
 	Listar(ctx context.Context, filtro entities.CitaFiltro) ([]entities.Cita, error)
 	Actualizar(ctx context.Context, c *entities.Cita) error
 	Cancelar(ctx context.Context, c *entities.Cita) error
+	CancelarConDerivacion(
+		ctx context.Context,
+		c *entities.Cita,
+		liberar bool,
+		motivoDerivacion string,
+	) error
+	CambiarEstadoConDerivacion(
+		ctx context.Context,
+		c *entities.Cita,
+		estadoDerivacion entities.EstadoDerivacion,
+		motivoDerivacion string,
+	) error
 	ExisteSolape(ctx context.Context, medicoID int64, inicio time.Time, duracionMin int, excluirID int64) (bool, error)
 	ExisteSolapePaciente(ctx context.Context, pacienteID int64, inicio time.Time, duracionMin int, excluirID int64) (bool, error)
 }

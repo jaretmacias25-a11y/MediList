@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: MediList API
-  version: 0.6.0
+  version: 0.8.0
   description: |
-    Contrato de los endpoints implementados hasta la Fase 5. Los endpoints de
-    las fases 6-8 se agregan a medida que se implementan; el roadmap está en
+    Contrato de los endpoints implementados hasta la Fase 7. Los endpoints de
+    la Fase 8 se agregan a medida que se implementan; el roadmap está en
     doc.md.
 
     Convenciones:
@@ -383,6 +383,44 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /api/v1/pacientes/{id}/transferir:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    post:
+      tags: [Pacientes]
+      summary: Transfiere el paciente a otro médico tratante
+      description: Solo admin/recepción con pacientes:transferir.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TransferirPacienteRequest'}
+      responses:
+        '200':
+          description: Transferencia registrada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/pacientes/{id}/transferencias:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Pacientes]
+      summary: Lista el historial de transferencias del paciente
+      responses:
+        '200':
+          description: Historial de transferencias
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /api/v1/medicos:
     get:
       tags: [Médicos]
@@ -664,6 +702,33 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /api/v1/citas/{id}/sobrescribir-derivacion:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    post:
+      tags: [Citas]
+      summary: Registra una excepción administrativa de derivación
+      description: Solo admin con derivaciones:sobrescribir. No crea una derivación falsa.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [motivo]
+              properties:
+                motivo: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200':
+          description: Excepción registrada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /api/v1/citas/{id}/estado:
     parameters:
       - {$ref: '#/components/parameters/Id'}
@@ -878,6 +943,37 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /api/v1/portal/derivaciones:
+    get:
+      tags: [Portal paciente]
+      summary: Lista las derivaciones del paciente autenticado
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Derivaciones propias, incluidas las vencidas
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /api/v1/portal/derivaciones/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Portal paciente]
+      summary: Detalle de una derivación propia
+      responses:
+        '200':
+          description: Derivación propia
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /api/v1/medico/agenda:
     get:
       tags: [Portal médico]
@@ -908,6 +1004,118 @@ paths:
               schema: {$ref: '#/components/schemas/Envelope'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/medico/citas/{id}/estado:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    patch:
+      tags: [Portal médico]
+      summary: Cambia el estado clínico de una cita propia
+      description: Solo permite confirmar, marcar atendida o no_asistio.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CambiarEstadoRequest'}
+      responses:
+        '200':
+          description: Cita actualizada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/medico/citas/{id}/nota:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Portal médico]
+      summary: Obtiene la nota de una cita propia
+      responses:
+        '200':
+          description: Nota de consulta
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      tags: [Portal médico]
+      summary: Crea la nota de una cita atendida
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NotaCitaRequest'}
+      responses:
+        '200':
+          description: Nota creada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    put:
+      tags: [Portal médico]
+      summary: Actualiza la nota con control de versión
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NotaCitaRequest'}
+      responses:
+        '200':
+          description: Nota actualizada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/medico/citas/{id}/derivaciones:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    post:
+      tags: [Portal médico]
+      summary: Emite una derivación desde una cita atendida
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DerivacionRequest'}
+      responses:
+        '201':
+          description: Derivación creada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/medico/derivaciones:
+    get:
+      tags: [Portal médico]
+      summary: Lista las derivaciones emitidas por el médico autenticado
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Derivaciones propias
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
 
   /api/v1/medico/pacientes/{id}:
     parameters:
@@ -1533,6 +1741,11 @@ components:
           description: Debe coincidir exactamente con un slot generado por /portal/disponibilidad.
         tipo: {type: string, enum: [primera_vez, control, telemedicina], default: primera_vez}
         motivo: {type: string, maxLength: 1000}
+        derivacion_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Obligatorio para especialidades con requiere_derivacion=true; prohibido para acceso directo.
 
     PortalCitaReprogramarRequest:
       type: object
@@ -1552,6 +1765,71 @@ components:
       type: object
       properties:
         motivo: {type: string, maxLength: 500}
+
+    NotaCitaRequest:
+      type: object
+      properties:
+        motivo: {type: string, maxLength: 5000}
+        evaluacion: {type: string, maxLength: 5000}
+        plan: {type: string, maxLength: 5000}
+        version: {type: integer, format: int64, description: Obligatorio para actualizar una nota existente.}
+
+    DerivacionRequest:
+      type: object
+      required: [especialidad_destino_id, motivo]
+      properties:
+        especialidad_destino_id: {type: integer, format: int64, minimum: 1}
+        medico_destino_id: {type: integer, format: int64, minimum: 1}
+        motivo: {type: string, minLength: 1, maxLength: 2000}
+        prioridad: {type: string, enum: [normal, preferente, urgente], default: normal}
+
+    TransferirPacienteRequest:
+      type: object
+      required: [medico_destino_id, motivo, version]
+      properties:
+        medico_destino_id: {type: integer, format: int64, minimum: 1}
+        motivo: {type: string, minLength: 1, maxLength: 1000}
+        version: {type: integer, format: int64}
+
+    NotaCita:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        cita_id: {type: integer, format: int64}
+        medico_id: {type: integer, format: int64}
+        motivo: {type: string}
+        evaluacion: {type: string}
+        plan: {type: string}
+        version: {type: integer, format: int64}
+
+    Derivacion:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        paciente_id: {type: integer, format: int64}
+        paciente_nombre: {type: string}
+        medico_origen_id: {type: integer, format: int64}
+        cita_origen_id: {type: integer, format: int64}
+        especialidad_destino_id: {type: integer, format: int64}
+        especialidad_destino: {type: string}
+        medico_destino_id: {type: integer, format: int64}
+        motivo: {type: string}
+        prioridad: {type: string, enum: [normal, preferente, urgente]}
+        estado: {type: string, enum: [pendiente, agendada, atendida, vencida, cancelada]}
+        vigente_desde: {type: string, format: date-time}
+        vigente_hasta: {type: string, format: date-time}
+        version: {type: integer, format: int64}
+
+    TransferenciaPaciente:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        paciente_id: {type: integer, format: int64}
+        medico_anterior_id: {type: integer, format: int64}
+        medico_nuevo_id: {type: integer, format: int64}
+        motivo: {type: string}
+        creada_por_usuario_id: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
 
     CitaRequest:
       type: object
@@ -1668,17 +1946,6 @@ components:
           schema: {$ref: '#/components/schemas/ErrorResponse'}
 
 x-pendientes:
-  - fase: 6
-    endpoints:
-      - /api/v1/medico/citas/{id}/nota
-      - /api/v1/medico/citas/{id}/derivaciones
-      - /api/v1/medico/derivaciones
-      - /api/v1/pacientes/{id}/transferir
-      - /api/v1/pacientes/{id}/transferencias
-  - fase: 7
-    endpoints:
-      - /api/v1/portal/derivaciones
-      - /api/v1/portal/derivaciones/{id}
   - fase: 8
     endpoints:
       - /api/v1/notificaciones

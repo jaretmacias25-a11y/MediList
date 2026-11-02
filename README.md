@@ -2,7 +2,7 @@
 
 Backend en **Go** para la gestión de pacientes, médicos, especialidades y citas de una clínica. Implementa una **arquitectura limpia por capas** con persistencia en **PostgreSQL**, autenticación **JWT**, control de acceso basado en roles (**RBAC**), cuentas de paciente con verificación de email, vinculación con historias existentes y auditoría de seguridad.
 
-El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente (registro, verificación de email, recuperación de contraseña y vinculación con historias existentes), la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, y la Fase 5 de agenda directa del paciente: reserva de las cinco especialidades de acceso directo, listado/detalle propio, reprogramación con versión y cancelación con política configurable.
+El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente, la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, la Fase 5 de agenda directa, la Fase 6 de flujo médico/derivaciones/transferencia interna y la Fase 7 de reserva de especialista con derivación: consumo transaccional, liberación/consumo por cancelación, no-show, reprogramación y excepción administrativa auditada.
 
 ---
 
@@ -54,6 +54,9 @@ MediList/
 │   │   ├── disponibilidad_service.go   # generación de slots y reglas de reserva
 │   │   ├── catalogo_service.go         # catálogo público del portal
 │   │   ├── portal_cita_service.go      # reserva, reprogramación y cancelación propias
+│   │   ├── medico_clinico_service.go   # estados, nota y derivaciones del médico
+│   │   ├── paciente_transfer_service.go # transferencia interna del médico tratante
+│   │   ├── derivacion_admin_service.go  # excepción administrativa de derivación
 │   │   ├── cuenta_service.go           # registro, verificación, reset y vinculación
 │   │   ├── error_service.go            # errores agregados (stdout + PostgreSQL)
 │   │   ├── retention_service.go        # retención de errores y auditoría
@@ -71,6 +74,10 @@ MediList/
 │   │   ├── cuenta_store.go             # registro, tokens y solicitudes de vinculación
 │   │   ├── agenda_store.go             # horarios, bloqueos y disponibilidad
 │   │   ├── catalogo_store.go           # catálogo público de especialidades/médicos
+│   │   ├── nota_cita_store.go          # nota mínima por cita
+│   │   ├── derivacion_store.go         # derivaciones clínicas
+│   │   ├── transferencia_store.go      # historial de médico tratante
+│   │   ├── excepcion_derivacion_store.go # excepciones administrativas auditadas
 │   │   ├── refresh_token_store.go      # refresh tokens hasheados
 │   │   ├── auditoria_store.go          # bitácora
 │   │   ├── error_store.go              # errores agregados
@@ -85,6 +92,9 @@ MediList/
 │       ├── agenda_handler.go           # horarios y bloqueos administrativos
 │       ├── catalogo_handler.go         # catálogo y disponibilidad del portal
 │       ├── portal_cita_handler.go      # citas propias del paciente
+│       ├── medico_clinico_handler.go   # estados, nota y derivaciones
+│       ├── paciente_transfer_handler.go # transferencia de médico tratante
+│       ├── derivacion_admin_handler.go # excepción de derivación
 │       ├── request_context.go          # X-Request-ID, traceparent y trace_id
 │       ├── report_error.go             # envío de errores a la agregación
 │       ├── rate_limit.go               # límite de intentos por IP
@@ -94,7 +104,7 @@ MediList/
 │       ├── cuenta_dto.go               # contratos de registro y vinculación
 │       └── *_handler.go                # endpoints
 ├── docs/
-│   └── openapi.yaml                    # contrato OpenAPI hasta Fase 4
+│   └── openapi.yaml                    # contrato OpenAPI hasta Fase 7
 ├── migrations/
 │   ├── 001_init.sql                    # tablas clínicas, índices y triggers
 │   ├── 002_seed.sql                    # especialidades iniciales
@@ -109,7 +119,9 @@ MediList/
 │   ├── 011_derivaciones_metadata.sql   # derivaciones, metadata de citas y notas
 │   ├── 012_cuentas_vinculacion.sql     # solicitudes de vinculación de cuentas
 │   ├── 013_ownership_medico.sql        # ownership y retiro de permisos globales del médico
-│   └── 014_pediatria_acceso_directo.sql # Pediatría como acceso directo (Fase 0)
+│   ├── 014_pediatria_acceso_directo.sql # Pediatría como acceso directo (Fase 0)
+│   ├── 015_transferencia_interna.sql    # médico responsable, historial y permiso
+│   └── 016_excepciones_derivacion.sql   # excepciones administrativas auditadas
 ├── deploy/observability/               # Loki + Promtail + Grafana + alertas
 │   ├── docker-compose.yml
 │   ├── loki/loki-config.yml
@@ -191,6 +203,7 @@ MediList/
    PORTAL_MAX_ADVANCE_DAYS=90
    PORTAL_CANCEL_CUTOFF_HOURS=24
    AUTO_CONFIRM_PORTAL_BOOKINGS=true
+   REFERRAL_VALID_DAYS=90
    ```
 
    Reemplaza `postgres` y `TU_PASSWORD_LOCAL` por el usuario y la contraseña que tengas configurados en tu propia instalación local de PostgreSQL. No publiques contraseñas reales en el README ni en archivos versionados.
@@ -234,6 +247,10 @@ MediList/
    ```
 
    La migración `014_pediatria_acceso_directo.sql` deja Pediatría como especialidad de acceso directo (`requiere_derivacion = false`) para todos, sin regla por edad. Con esto, las especialidades directas son Medicina General, Fisioterapia, Odontología, Nutrición y Pediatría; el resto sigue exigiendo derivación desde una cita de Medicina General atendida.
+
+   La migración `015_transferencia_interna.sql` agrega `pacientes.medico_responsable_id`, el historial `transferencias_paciente` y el permiso `pacientes:transferir` para `admin` y `recepcion`. Es aditiva e idempotente.
+
+   La migración `016_excepciones_derivacion.sql` agrega el registro de excepciones administrativas para citas de especialista sin derivación. No crea derivaciones falsas: guarda motivo, cita, paciente, especialidad, médico y autorizador.
 
    El correo de desarrollo se escribe en `outbox/emails/*.eml`; el token no aparece en logs. Antes de producción se debe implementar un proveedor real detrás de `service.EmailSender` y cambiar `EMAIL_PROVIDER`. La API actualmente solo acepta `EMAIL_PROVIDER=outbox` y emite una advertencia si se usa en producción.
 
@@ -475,13 +492,17 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 | Especialidades (leer) | Sí | Sí | Sí | Sí | No | No |
 | Especialidades (escribir) | Sí | No | No | No | No | No |
 | Citas (leer) | Sí | No global; solo propias | Sí | Sí | No | No |
-| Citas (escribir) | Sí | No global; acciones propias en Fase 6 | Sí | No | No | No |
+| Citas (escribir) | Sí | Acciones propias | Sí | No | No | No |
 | Perfil de portal (leer/escribir) | Sí | No | No | No | No | Sí |
 | Agenda médica propia | Sí | Sí | No | No | No | No |
 | Agenda administrativa (horarios/bloqueos) | Sí | No | Sí | No | No | No |
 | Catálogo de portal | Sí | No | No | No | No | Sí |
 | Disponibilidad de portal | Sí | No | No | No | No | Sí |
 | Citas propias del portal | Sí | No | No | No | No | Sí |
+| Derivaciones propias | Sí | No | No | No | No | Sí |
+| Sobrescribir derivación | Sí | No | No | No | No | No |
+| Nota y derivaciones propias | Sí | Sí | No | No | No | No |
+| Transferencia de paciente | Sí | No | Sí | No | No | No |
 | Cuentas (vincular) | Sí | No | Sí | No | No | No |
 | Usuarios (leer) | Sí | No | No | No | Sí | No |
 | Usuarios (escribir) | Sí | No | No | No | No | No |
@@ -489,7 +510,7 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 | Auditoría (leer) | Sí | No | No | No | Sí | No |
 | Errores (leer) | Sí | No | No | No | Sí | No |
 
-El rol `paciente` ya tiene permisos `portal:*` y `catalogo:leer`; la Fase 3 expone `GET/PUT /portal/perfil`, la Fase 4 el catálogo/disponibilidad y la Fase 5 la reserva, reprogramación y cancelación de citas propias. El rol `medico` ya no tiene permisos globales de pacientes/citas: usa `medico:agenda:leer` y `pacientes:atendidos:leer`, y sus acciones de escritura propias se completarán en la Fase 6.
+El rol `paciente` ya tiene permisos `portal:*` y `catalogo:leer`; la Fase 3 expone `GET/PUT /portal/perfil`, la Fase 4 el catálogo/disponibilidad, la Fase 5 las citas propias y la Fase 7 la reserva de especialista con derivación. El rol `medico` ya no tiene permisos globales de pacientes/citas: usa `medico:agenda:*`, `medico:nota:*`, `derivaciones:*` y `pacientes:atendidos:leer`. `admin` y `recepcion` pueden transferir el médico tratante con `pacientes:transferir`.
 
 ### Administración de usuarios
 
@@ -558,6 +579,8 @@ Los endpoints de esta tabla son administrativos. Además del permiso, la API exi
 | `GET` | `/pacientes/{id}` | `pacientes:leer` | Obtiene el paciente con sus datos de persona |
 | `PUT` | `/pacientes/{id}` | `pacientes:escribir` | Actualiza datos personales y clínicos |
 | `DELETE` | `/pacientes/{id}` | `pacientes:escribir` | Baja lógica (`activo=false`) |
+| `POST` | `/pacientes/{id}/transferir` | `pacientes:transferir` | Reasigna el médico tratante con `version` y motivo |
+| `GET` | `/pacientes/{id}/transferencias` | `pacientes:transferir` | Historial de transferencias internas |
 
 ### Médicos
 
@@ -598,6 +621,7 @@ Los endpoints de esta tabla son administrativos y aplican la misma guarda por ro
 | `PUT` | `/citas/{id}` | `citas:escribir` | Reagenda o actualiza la cita |
 | `PATCH` | `/citas/{id}/estado` | `citas:escribir` | Aplica una transición de estado |
 | `DELETE` | `/citas/{id}` | `citas:escribir` | Cancela la cita (no borra el registro) |
+| `POST` | `/citas/{id}/sobrescribir-derivacion` | `derivaciones:sobrescribir` | Excepción administrativa auditada, solo `admin` |
 
 Estados: `programada`, `confirmada`, `atendida`, `no_asistio`, `cancelada`, `reprogramada`.
 
@@ -621,11 +645,13 @@ El perfil se resuelve exclusivamente desde `pacientes.usuario_id`. El body no ad
 | `GET` | `/portal/especialidades` | `catalogo:leer` | Catálogo activo con `requiere_derivacion` y duración |
 | `GET` | `/portal/medicos` | `catalogo:leer` | Médicos activos que aceptan portal; filtro `especialidad_id` |
 | `GET` | `/portal/disponibilidad` | `portal:citas:leer` | Slots reservables por `medico_id`, `desde` y `hasta` |
-| `POST` | `/portal/citas` | `portal:citas:escribir` | Agenda una cita propia en una especialidad directa |
+| `POST` | `/portal/citas` | `portal:citas:escribir` | Agenda una cita directa o de especialista con `derivacion_id` |
 | `GET` | `/portal/citas` | `portal:citas:leer` | Lista solo las citas propias; filtros de estado/fecha |
 | `GET` | `/portal/citas/{id}` | `portal:citas:leer` | Detalle solo si la cita es propia |
 | `PUT` | `/portal/citas/{id}` | `portal:citas:escribir` | Reprograma el slot propio; exige `version` |
-| `POST` | `/portal/citas/{id}/cancelar` | `portal:citas:escribir` | Cancela si se respeta el corte configurado |
+| `POST` | `/portal/citas/{id}/cancelar` | `portal:citas:escribir` | Cancela; libera o consume la derivación según el corte |
+| `GET` | `/portal/derivaciones` | `portal:derivaciones:leer` | Derivaciones propias, incluyendo vencidas |
+| `GET` | `/portal/derivaciones/{id}` | `portal:derivaciones:leer` | Detalle solo si la derivación es propia |
 
 `/portal/medicos` devuelve solo datos públicos del profesional (nombres, especialidad, bio, foto y duración), nunca documento, email, teléfono ni dirección. `/portal/disponibilidad` genera slots en `CLINIC_TIMEZONE`, los entrega en UTC, resta bloqueos y citas `programada`/`confirmada`, aplica la antelación mínima y el horizonte máximo. Las fechas `desde`/`hasta` son inclusivas y el rango no puede superar el horizonte configurado.
 
@@ -639,7 +665,15 @@ El médico se resuelve exclusivamente desde `medicos.usuario_id`. La agenda igno
 |---|---|---|---|
 | `GET` | `/medico/agenda` | `medico:agenda:leer` | Citas propias; filtros `estado`, `desde`, `hasta`, paginación |
 | `GET` | `/medico/citas/{id}` | `medico:agenda:leer` | Detalle solo si la cita es propia |
-| `GET` | `/medico/pacientes/{id}` | `pacientes:atendidos:leer` | Paciente con cita `programada`, `confirmada` o `atendida` con el médico |
+| `PATCH` | `/medico/citas/{id}/estado` | `medico:agenda:escribir` | Confirma, marca atendida o no asistió |
+| `GET` | `/medico/citas/{id}/nota` | `medico:nota:leer` | Nota de una cita propia |
+| `POST` | `/medico/citas/{id}/nota` | `medico:nota:escribir` | Crea la nota de una cita atendida |
+| `PUT` | `/medico/citas/{id}/nota` | `medico:nota:escribir` | Actualiza la nota con `version` |
+| `POST` | `/medico/citas/{id}/derivaciones` | `derivaciones:escribir` | Deriva desde una cita MED-GEN atendida |
+| `GET` | `/medico/derivaciones` | `derivaciones:leer` | Derivaciones emitidas por el médico |
+| `GET` | `/medico/pacientes/{id}` | `pacientes:atendidos:leer` | Paciente con cita vigente/atendida o asignación activa |
+
+La nota solo se permite sobre una cita `atendida`; la derivación exige que el médico de origen sea `MED-GEN`, que la cita esté atendida y que la especialidad destino requiera derivación. La transferencia interna reasigna `pacientes.medico_responsable_id` y conserva el acceso del médico anterior solo por sus citas vigentes o atendidas.
 
 ### Concurrencia y consistencia
 
@@ -959,7 +993,26 @@ Las pruebas de la Fase 4 cubren:
 - validación de solapes y control de versión de horarios;
 - CRUD de horarios/bloqueos y consulta de citas activas contra PostgreSQL (`TestAgendaStoreCRUDYConsultasDeDisponibilidad`).
 
-La Fase 5 no agrega una migración nueva: reutiliza las columnas de metadata de citas de la migración 011. La prueba de integración del store se ejecuta con `TEST_DATABASE_URL` apuntando a una base migrada; se omiten automáticamente si la variable no existe. También se validó el flujo HTTP completo sobre una base temporal desde cero: crear médico, crear horario, consultar disponibilidad (2 slots), crear bloqueo (1 slot), rechazar solape y versión obsoleta con `409`, actualizar con `200` y desactivar horario (0 slots).
+La Fase 5 no agrega una migración nueva: reutiliza las columnas de metadata de citas de la migración 011. La Fase 6 incorpora la migración 015 para la transferencia interna y la Fase 7 la 016 para excepciones administrativas de derivación. La prueba de integración del store se ejecuta con `TEST_DATABASE_URL` apuntando a una base migrada; se omiten automáticamente si la variable no existe. También se validó el flujo HTTP completo sobre una base temporal desde cero: crear médico, crear horario, consultar disponibilidad (2 slots), crear bloqueo (1 slot), rechazar solape y versión obsoleta con `409`, actualizar con `200` y desactivar horario (0 slots).
+
+Las pruebas de la Fase 7 cubren:
+
+- reserva de especialista con derivación `pendiente`, consumo a `agendada` y bloqueo de reutilización;
+- derivación vencida, de otro paciente, de otra especialidad o dirigida a otro médico;
+- liberación de la derivación al cancelar con antelación;
+- consumo por cancelación tardía (`cancelacion_tardia`) y por no-show (`no_show`);
+- reprogramación conservando la misma derivación;
+- listado y detalle de derivaciones propias;
+- excepción administrativa solo para `admin` con motivo y autorizador.
+
+Las pruebas de la Fase 6 cubren:
+
+- cambios de estado permitidos al médico de la cita y rechazo de citas ajenas;
+- nota solo sobre cita atendida, creación y actualización con `version`;
+- derivación solo desde una cita `MED-GEN` atendida, con destino que requiere derivación;
+- transferencia interna con control de versión, motivo, historial y rechazo de auto-transferencia;
+- ownership por asignación activa (`PacienteStore.PerteneceAMedico`);
+- persistencia y triggers de `notas_cita`, `derivaciones` y `transferencias_paciente`.
 
 Las pruebas de la Fase 5 cubren:
 
@@ -972,6 +1025,10 @@ Las pruebas de la Fase 5 cubren:
 - carrera de dos pacientes por el mismo slot: una cita y un `409`.
 
 El E2E de Fase 5 se ejecutó sobre una base temporal desde cero con un paciente verificado: reserva `201`, cita `confirmada` con canal `portal_paciente`, listado propio, reprogramación `200`, cancelación `200` y rechazo de Cardiología con `409 requiere_derivacion`.
+
+El E2E de Fase 6 se ejecutó sobre una base temporal desde cero: el médico de Medicina General marcó la cita como `atendida`, creó la nota, emitió una derivación a Otorrinolaringología, administración transfirió al paciente y el historial registró el cambio. El médico nuevo pudo leer al paciente asignado y el médico anterior recibió `403` para un paciente sin cita ni asignación.
+
+El E2E de Fase 7 se ejecutó sobre una base temporal desde cero: el paciente vio su derivación, reservó al especialista, la derivación pasó a `agendada`, una cancelación temprana la devolvió a `pendiente`, la reprogramación conservó la derivación, una cancelación tardía la consumió como `cancelacion_tardia` y el no-show como `no_show`. La excepción administrativa también quedó registrada con motivo y autorizador.
 
 Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos registros concurrentes del mismo documento, verificación de un solo uso, token vencido y reutilizado, reset con revocación de refresh tokens, aprobación/rechazo de vinculación y vinculación de médico. También se prueba que el login de un paciente sin email verificado no emite sesión y que una contraseña incorrecta no revela el estado de verificación.
 
@@ -986,6 +1043,10 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 | Paciente | `pacientes` | `PacienteStore` |
 | Médico | `medicos` | `MedicoStore` |
 | Cita | `citas` | `CitaStore` |
+| NotaCita | `notas_cita` | `NotaCitaStore` |
+| Derivacion | `derivaciones` | `DerivacionStore` |
+| TransferenciaPaciente | `transferencias_paciente` | `TransferenciaStore` |
+| ExcepcionDerivacion | `excepciones_derivacion` | `ExcepcionDerivacionStore` |
 | HorarioProfesional | `horarios_profesional` | `AgendaStore` |
 | BloqueoAgenda | `bloqueos_agenda` | `AgendaStore` |
 | Disponibilidad (calculada) | `horarios_profesional`, `bloqueos_agenda`, `citas` | `DisponibilidadService` |
@@ -1020,6 +1081,11 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 13. El paciente solo agenda especialidades con `requiere_derivacion=false`; el servidor fuerza su `paciente_id`, el canal `portal_paciente` y la duración del slot.
 14. La reprogramación de portal exige `version`, no cambia paciente/médico y vuelve a validar el slot; la cancelación respeta `PORTAL_CANCEL_CUTOFF_HOURS`.
 15. Dos pacientes que compiten por el mismo slot obtienen una sola cita y un `409` gracias a las restricciones de exclusión de PostgreSQL.
+16. El médico solo cambia estados de sus propias citas, registra una nota por cita atendida y deriva únicamente desde una cita de Medicina General atendida hacia una especialidad que requiere derivación.
+17. La transferencia interna cambia `pacientes.medico_responsable_id`, exige `pacientes:transferir`, motivo y versión, y deja historial inmutable. El médico anterior conserva acceso solo por citas vigentes o atendidas.
+18. Una cita de especialista exige una derivación `pendiente`, vigente, del mismo paciente y de la especialidad/médico seleccionados; la reserva consume la derivación a `agendada` en la misma transacción con `FOR UPDATE`.
+19. Cancelar con antelación libera la derivación a `pendiente`; cancelar tarde o marcar no-show la consume como `cancelada` con motivo. Reprogramar conserva la misma derivación si sigue vigente.
+20. La sobrescritura administrativa no crea derivaciones falsas: registra una excepción con motivo y autorizador, y solo puede ejecutarla `admin` con `derivaciones:sobrescribir`.
 10. El refresh token se guarda como hash SHA-256; nunca en texto plano.
 11. La reutilización de un refresh token revocado revoca todas las sesiones del usuario.
 12. Cada access token incluye la versión de sesión (`ver`); si no coincide con `usuarios.token_version`, se rechaza aunque la firma sea válida.

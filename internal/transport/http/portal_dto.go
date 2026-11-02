@@ -31,6 +31,7 @@ type portalCitaRequest struct {
 	FechaHoraInicio string `json:"fecha_hora_inicio"`
 	Tipo            string `json:"tipo"`
 	Motivo          string `json:"motivo"`
+	DerivacionID    *int64 `json:"derivacion_id"`
 }
 
 func (r portalCitaRequest) toService() (service.PortalCitaInput, error) {
@@ -43,6 +44,7 @@ func (r portalCitaRequest) toService() (service.PortalCitaInput, error) {
 		FechaHoraInicio: fecha,
 		Tipo:            entities.TipoCita(strings.TrimSpace(r.Tipo)),
 		Motivo:          r.Motivo,
+		DerivacionID:    r.DerivacionID,
 	}, nil
 }
 

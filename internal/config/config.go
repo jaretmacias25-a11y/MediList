@@ -58,6 +58,7 @@ type Config struct {
 	PortalMaxAdvanceDays      int
 	PortalCancelCutoffHours   int
 	AutoConfirmPortalBookings bool
+	ReferralValidDays         int
 }
 
 // Load lee .env (sin sobrescribir variables del sistema) y las variables de entorno.
@@ -106,6 +107,7 @@ func Load() Config {
 		PortalMaxAdvanceDays:      getenvInt("PORTAL_MAX_ADVANCE_DAYS", 90),
 		PortalCancelCutoffHours:   getenvInt("PORTAL_CANCEL_CUTOFF_HOURS", 24),
 		AutoConfirmPortalBookings: getenvBool("AUTO_CONFIRM_PORTAL_BOOKINGS", true),
+		ReferralValidDays:         getenvInt("REFERRAL_VALID_DAYS", 90),
 	}
 }
 
@@ -230,6 +232,9 @@ func (c Config) Validate() error {
 	}
 	if c.PortalCancelCutoffHours < 0 || c.PortalCancelCutoffHours > 720 {
 		return fmt.Errorf("PORTAL_CANCEL_CUTOFF_HOURS debe estar entre 0 y 720")
+	}
+	if c.ReferralValidDays < 1 || c.ReferralValidDays > 365 {
+		return fmt.Errorf("REFERRAL_VALID_DAYS debe estar entre 1 y 365")
 	}
 	return nil
 }

@@ -85,6 +85,10 @@ func main() {
 	pacienteStore := postgres.NewPacienteStore(pool)
 	medicoStore := postgres.NewMedicoStore(pool)
 	citaStore := postgres.NewCitaStore(pool)
+	notaCitaStore := postgres.NewNotaCitaStore(pool)
+	derivacionStore := postgres.NewDerivacionStore(pool)
+	transferenciaStore := postgres.NewTransferenciaStore(pool)
+	excepcionDerivacionStore := postgres.NewExcepcionDerivacionStore(pool)
 	agendaStore := postgres.NewAgendaStore(pool)
 	catalogoStore := postgres.NewCatalogoStore(pool)
 	usuarioStore := postgres.NewUsuarioStore(pool)
@@ -127,12 +131,22 @@ func main() {
 	)
 	catalogoService := service.NewCatalogoService(catalogoStore)
 	portalCitaService := service.NewPortalCitaService(
-		citaStore, pacienteStore, medicoStore, disponibilidadService,
+		citaStore, pacienteStore, medicoStore, derivacionStore, disponibilidadService,
 		service.PortalCitaConfig{
 			CancelCutoff: time.Duration(cfg.PortalCancelCutoffHours) * time.Hour,
 			AutoConfirm:  cfg.AutoConfirmPortalBookings,
 		},
 		emailSender,
+	)
+	medicoClinicoService := service.NewMedicoClinicoService(
+		citaStore, notaCitaStore, derivacionStore, medicoStore, especialidadStore,
+		service.MedicoClinicoConfig{ReferralValidDays: cfg.ReferralValidDays},
+	)
+	pacienteTransferService := service.NewPacienteTransferService(
+		pacienteStore, medicoStore, transferenciaStore,
+	)
+	derivacionAdminService := service.NewDerivacionAdminService(
+		citaStore, medicoStore, excepcionDerivacionStore,
 	)
 
 	authService := service.NewAuthService(service.AuthConfig{
@@ -170,25 +184,28 @@ func main() {
 
 	// Transporte (HTTP)
 	router := httpapi.NewRouter(httpapi.Dependencies{
-		Especialidades: especialidadService,
-		Pacientes:      pacienteService,
-		Medicos:        medicoService,
-		Citas:          citaService,
-		Auth:           authService,
-		Usuarios:       usuarioService,
-		Cuentas:        cuentaService,
-		PortalPaciente: portalPacienteService,
-		MedicoPortal:   medicoPortalService,
-		Agenda:         agendaService,
-		Catalogo:       catalogoService,
-		Disponibilidad: disponibilidadService,
-		PortalCitas:    portalCitaService,
-		Auditoria:      auditoriaService,
-		AuditoriaStore: auditoriaStore,
-		ActorStore:     actorStore,
-		Errores:        errorService,
-		DB:             pool,
-		Logger:         logger,
+		Especialidades:   especialidadService,
+		Pacientes:        pacienteService,
+		Medicos:          medicoService,
+		Citas:            citaService,
+		Auth:             authService,
+		Usuarios:         usuarioService,
+		Cuentas:          cuentaService,
+		PortalPaciente:   portalPacienteService,
+		MedicoPortal:     medicoPortalService,
+		Agenda:           agendaService,
+		Catalogo:         catalogoService,
+		Disponibilidad:   disponibilidadService,
+		PortalCitas:      portalCitaService,
+		MedicoClinico:    medicoClinicoService,
+		PacienteTransfer: pacienteTransferService,
+		DerivacionAdmin:  derivacionAdminService,
+		Auditoria:        auditoriaService,
+		AuditoriaStore:   auditoriaStore,
+		ActorStore:       actorStore,
+		Errores:          errorService,
+		DB:               pool,
+		Logger:           logger,
 	})
 
 	server := &http.Server{

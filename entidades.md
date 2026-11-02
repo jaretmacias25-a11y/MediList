@@ -112,6 +112,7 @@ Las migraciones 008–011 materializan el modelo operativo de agenda:
 | `horarios_profesional` | Plantilla semanal de disponibilidad | `medico_id`, `dia_semana`, `hora_inicio`, `hora_fin`, `duracion_slot_min`, vigencia, `activo`, `version` |
 | `bloqueos_agenda` | Ausencias y bloqueos puntuales | `medico_id`, `inicio`, `fin`, `motivo`, `creado_por` |
 | `derivaciones` | Autorización clínica para especialista | `paciente_id`, `medico_origen_id`, `cita_origen_id`, `especialidad_destino_id`, `medico_destino_id`, `motivo`, `prioridad`, `estado`, vigencia, `version` |
+| `excepciones_derivacion` | Autorización administrativa excepcional sin derivación clínica | `cita_id`, `paciente_id`, `especialidad_id`, `medico_id`, `motivo`, `autorizado_por_usuario_id` |
 | `notas_cita` | Nota mínima de la consulta | `cita_id` UK, `medico_id`, `motivo`, `evaluacion`, `plan`, `version` |
 
 La entidad conceptual **Derivacion** se implementa como `derivaciones`, con la cita de origen (`cita_origen_id`) como encuentro habilitante. Una derivación solo nace de una cita de Medicina General `atendida`, la especialidad destino debe exigir derivación y una misma derivación no puede sostener dos citas activas o atendidas.
@@ -119,6 +120,10 @@ La entidad conceptual **Derivacion** se implementa como `derivaciones`, con la c
 **Fase 4 implementada:** `HorarioProfesional` y `BloqueoAgenda` tienen entidad, store, CRUD administrativo y reglas de solape/versión. `SlotDisponible` y `Disponibilidad` son objetos calculados por `DisponibilidadService`; no se persisten. El servicio convierte las horas locales de `CLINIC_TIMEZONE` a UTC, resta bloqueos y citas `programada`/`confirmada`, y aplica antelación mínima y horizonte máximo.
 
 **Fase 5 implementada:** `Cita` persiste `canal`, `creada_por_usuario_id`, `derivacion_id` y `motivo_cancelacion`. El portal del paciente usa `PortalCitaService`, fuerza `paciente_id` desde el actor y `canal=portal_paciente`, y solo permite especialidades con `requiere_derivacion=false`. La reprogramación usa `version` y conserva paciente/médico; la cancelación respeta `PORTAL_CANCEL_CUTOFF_HOURS`.
+
+**Fase 6 implementada:** `Derivacion`, `NotaCita` y `TransferenciaPaciente` tienen entidad, store y endpoints. `pacientes.medico_responsable_id` representa el médico tratante actual y `transferencias_paciente` conserva el historial inmutable. La relación de acceso del médico incluye sus citas activas/atendidas y la asignación activa; la nota es única por cita y la derivación nace de una cita `MED-GEN` atendida.
+
+**Fase 7 implementada:** la derivación pasa a `agendada` al reservar el especialista, vuelve a `pendiente` si se cancela con antelación, se consume como `cancelada` por cancelación tardía o no-show y se marca `atendida` al atender la cita. `ExcepcionDerivacion` registra una autorización administrativa excepcional sin crear una derivación clínica falsa. La reserva usa bloqueo `FOR UPDATE` y el índice parcial de una cita activa por derivación.
 
 Planificado para la Fase 6: `pacientes.medico_responsable_id` (asignación actual) y `transferencias_paciente` (historial). La transferencia es interna, exige `pacientes:transferir`, motivo y auditoría; el médico nuevo obtiene acceso por la asignación y el anterior conserva solo sus citas vigentes o atendidas.
 

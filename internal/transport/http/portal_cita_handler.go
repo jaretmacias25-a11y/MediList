@@ -114,6 +114,44 @@ func (h *PortalCitaHandler) Reprogramar(w http.ResponseWriter, r *http.Request) 
 	writeData(w, http.StatusOK, nuevaCitaResponse(*cita))
 }
 
+func (h *PortalCitaHandler) ListarDerivaciones(w http.ResponseWriter, r *http.Request) {
+	actor := actorFromContext(r.Context())
+	if actor == nil {
+		writeUnauthorized(w)
+		return
+	}
+	opts := listOptions(r)
+	lista, err := h.svc.ListarDerivaciones(r.Context(), actor, opts)
+	if err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+	resp := make([]derivacionResponse, 0, len(lista))
+	for _, derivacion := range lista {
+		resp = append(resp, nuevaDerivacionResponse(derivacion))
+	}
+	writeList(w, resp, opts, len(resp))
+}
+
+func (h *PortalCitaHandler) ObtenerDerivacion(w http.ResponseWriter, r *http.Request) {
+	actor := actorFromContext(r.Context())
+	if actor == nil {
+		writeUnauthorized(w)
+		return
+	}
+	derivacionID, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+	derivacion, err := h.svc.ObtenerDerivacion(r.Context(), actor, derivacionID)
+	if err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+	writeData(w, http.StatusOK, nuevaDerivacionResponse(*derivacion))
+}
+
 func (h *PortalCitaHandler) Cancelar(w http.ResponseWriter, r *http.Request) {
 	actor := actorFromContext(r.Context())
 	if actor == nil {

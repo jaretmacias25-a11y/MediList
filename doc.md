@@ -2,7 +2,7 @@
 
 > Fecha: 26/10/2026  
 > Alcance: backend Go/PostgreSQL. No incluye frontend.  
-> Estado: Fase 0 cerrada; fases 1–5 completadas; la Fase 6 (flujo médico, derivaciones y transferencia interna) es la siguiente.
+> Estado: Fase 0 cerrada; fases 1–7 completadas; la Fase 8 (notificaciones y recordatorios) es la siguiente.
 > Documentos relacionados: `README.md` (estado actual) y `entidades.md` (modelo completo objetivo).
 
 ---
@@ -17,7 +17,7 @@ La base actual ya tiene una parte importante del backend administrativo:
 - control de concurrencia con restricciones de exclusión y versiones optimistas;
 - auditoría, logs estructurados y retención.
 
-La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. La **Fase 4 está implementada**: catálogo administrativo completo, CRUD de horarios/bloqueos, perfil público del médico, cálculo de disponibilidad por zona horaria, antelación y horizonte, y endpoints `/portal/especialidades`, `/portal/medicos` y `/portal/disponibilidad`. La **Fase 5 también está implementada**: el paciente reserva, lista, consulta, reprograma y cancela sus propias citas en las cinco especialidades de acceso directo, con canal `portal_paciente`, versionado y control de carreras. Todavía **no existen las acciones clínicas del médico ni las derivaciones**: eso corresponde a las fases 6–8. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
+La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. La **Fase 4 está implementada**: catálogo administrativo completo, CRUD de horarios/bloqueos, perfil público del médico, cálculo de disponibilidad por zona horaria, antelación y horizonte, y endpoints `/portal/especialidades`, `/portal/medicos` y `/portal/disponibilidad`. La **Fase 5 está implementada**: el paciente reserva, lista, consulta, reprograma y cancela sus propias citas en las cinco especialidades de acceso directo, con canal `portal_paciente`, versionado y control de carreras. La **Fase 6 también está implementada**: el médico cambia estados de sus citas, registra la nota de consulta, emite derivaciones desde Medicina General y administración puede transferir el médico tratante con historial y ownership por asignación. La **Fase 7 está implementada**: el paciente consulta sus derivaciones, reserva al especialista con consumo transaccional, la cancelación temprana libera la derivación, la tardía/no-show la consume, la reprogramación la conserva y existe una excepción administrativa auditada. Las notificaciones y el endurecimiento quedan en fases 8–9. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
 
 El orden recomendado para concluir el backend es:
 
@@ -27,8 +27,8 @@ El orden recomendado para concluir el backend es:
 4. Implementar autorización por fila: el paciente solo ve lo suyo y el médico solo ve su agenda.
 5. ~~Crear catálogo, horarios y disponibilidad.~~ (completado)
 6. ~~Permitir que el paciente agende las cinco áreas de acceso directo.~~ (completado)
-7. Implementar el flujo médico mínimo y las derivaciones.
-8. Permitir que el paciente use una derivación para agendar al especialista.
+7. ~~Implementar el flujo médico mínimo y las derivaciones.~~ (completado)
+8. ~~Permitir que el paciente use una derivación para agendar al especialista.~~ (completado)
 9. Añadir notificaciones, pruebas, endurecimiento y despliegue controlado.
 
 La regla central solicitada queda así:
@@ -115,11 +115,11 @@ Pediatría será de **acceso directo para todos**, sin regla por edad. Se implem
 
 ### 2.2 Lo que falta para el flujo solicitado
 
-- **Portal del paciente:** perfil, catálogo, disponibilidad, reserva, listado, reprogramación y cancelación de citas propias implementados; faltan las derivaciones (fase 7).
-- **Portal del médico:** existe la agenda propia; faltan "mi cita" con acciones, "marcar atendida" y "emitir derivación" (fase 6).
+- **Portal del paciente:** perfil, catálogo, disponibilidad, citas propias, reserva de especialista con derivación y listado/detalle de derivaciones implementados.
+- **Portal del médico:** agenda, cambio de estado, nota de consulta, derivaciones y transferencia interna implementados.
 - **Disponibilidad y reserva:** tablas, CRUD administrativo, generación de slots, zona horaria, antelación/horizonte y reserva transaccional con control de carreras implementados.
 - **Especialidades solicitadas:** `FISIO`, `ODONTO`, `NUTRI` y `OTORRINO` están en el catálogo y se exponen en el portal; las cinco directas se pueden reservar desde la Fase 5.
-- **Derivaciones:** la tabla, triggers y pruebas de esquema existen; faltan servicio, endpoints, consumo y liberación desde la API.
+- **Derivaciones:** emisión médica, listado/detalle del paciente, consumo transaccional, liberación, cancelación tardía, no-show, vencimiento y excepción administrativa implementados.
 - **Autorización por fila:** un médico con `citas:leer` puede consultar todas las citas; el rol paciente existe, pero el patrón actual no está preparado para “solo lo mío”.
 - **Notificaciones transaccionales:** verificación y reset ya tienen correo de desarrollo; faltan recordatorios, confirmaciones y outbox durable.
 - **Nota/atención clínica mínima:** una cita solo cambia de estado; no hay endpoint para registrar la consulta que justifique una derivación.
@@ -768,9 +768,9 @@ WHERE codigo = 'PED'
 - No se introduce una regla por edad ni una lista hardcodeada; la fuente de verdad sigue siendo `especialidades.requiere_derivacion`.
 - La migración es idempotente y no modifica otras especialidades.
 
-### 5.7 Migración 015 — transferencia interna (propuesta)
+### 5.7 Migración 015 — transferencia interna
 
-**Estado:** pendiente; se implementa en la Fase 6. Archivo previsto `migrations/015_transferencias_paciente.sql`.
+**Estado:** implementada en la Fase 6 (`migrations/015_transferencia_interna.sql`).
 
 ```sql
 ALTER TABLE pacientes
@@ -807,7 +807,9 @@ ON CONFLICT DO NOTHING;
 - El historial es append-only y la asignación actual se refleja en `pacientes.medico_responsable_id`.
 - El nuevo médico obtiene acceso por asignación activa; el anterior conserva acceso solo por citas vigentes/atendidas.
 
-### 5.8 Migración 016 — notificaciones y outbox (propuesta)
+### 5.8 Migración 017 - notificaciones y outbox (propuesta)
+
+La migración 016 se reserva para `excepciones_derivacion`, implementada en la Fase 7; el outbox de notificaciones pasa a la 017.
 
 Para no perder correos si el proveedor falla:
 
@@ -947,8 +949,8 @@ Decisiones implementadas:
 | `GET` | `/portal/citas/{id}` | `portal:citas:leer` | Detalle solo si es propia (implementado en Fase 5) |
 | `PUT` | `/portal/citas/{id}` | `portal:citas:escribir` | Reprograma con `version` (implementado en Fase 5) |
 | `POST` | `/portal/citas/{id}/cancelar` | `portal:citas:escribir` | Cancela si cumple política (implementado en Fase 5) |
-| `GET` | `/portal/derivaciones` | `portal:derivaciones:leer` | Derivaciones propias |
-| `GET` | `/portal/derivaciones/{id}` | `portal:derivaciones:leer` | Detalle propio |
+| `GET` | `/portal/derivaciones` | `portal:derivaciones:leer` | Derivaciones propias (implementado en Fase 7) |
+| `GET` | `/portal/derivaciones/{id}` | `portal:derivaciones:leer` | Detalle propio (implementado en Fase 7) |
 
 Reserva directa:
 
@@ -1006,14 +1008,15 @@ Respuesta de cita recomendada:
 
 | Método | Ruta | Permiso | Descripción |
 |---|---|---|---|
-| `GET` | `/medico/agenda` | `medico:agenda:leer` | Citas propias por rango/estado (básico implementado en Fase 3) |
-| `GET` | `/medico/citas/{id}` | `medico:agenda:leer` | Detalle solo si es su cita (lectura implementada en Fase 3) |
-| `PATCH` | `/medico/citas/{id}/estado` | `medico:agenda:escribir` | Confirma, atiende o marca no asistió |
-| `POST` | `/medico/citas/{id}/nota` | `medico:nota:escribir` | Nota mínima de consulta |
-| `PUT` | `/medico/citas/{id}/nota` | `medico:nota:escribir` | Actualiza nota con `version` |
-| `POST` | `/medico/citas/{id}/derivaciones` | `derivaciones:escribir` | Emite derivación desde cita atendida |
-| `GET` | `/medico/derivaciones` | `derivaciones:leer` | Derivaciones emitidas por el médico |
-| `GET` | `/medico/pacientes/{id}` | `pacientes:atendidos:leer` | Paciente con relación de atención (implementado en Fase 3) |
+| `GET` | `/medico/agenda` | `medico:agenda:leer` | Citas propias por rango/estado (implementado) |
+| `GET` | `/medico/citas/{id}` | `medico:agenda:leer` | Detalle solo si es su cita (implementado) |
+| `PATCH` | `/medico/citas/{id}/estado` | `medico:agenda:escribir` | Confirma, atiende o marca no asistió (Fase 6) |
+| `GET` | `/medico/citas/{id}/nota` | `medico:nota:leer` | Nota de una cita propia (Fase 6) |
+| `POST` | `/medico/citas/{id}/nota` | `medico:nota:escribir` | Nota mínima de consulta (Fase 6) |
+| `PUT` | `/medico/citas/{id}/nota` | `medico:nota:escribir` | Actualiza nota con `version` (Fase 6) |
+| `POST` | `/medico/citas/{id}/derivaciones` | `derivaciones:escribir` | Emite derivación desde cita atendida (Fase 6) |
+| `GET` | `/medico/derivaciones` | `derivaciones:leer` | Derivaciones emitidas por el médico (Fase 6) |
+| `GET` | `/medico/pacientes/{id}` | `pacientes:atendidos:leer` | Paciente con cita o asignación activa (Fase 6) |
 
 Transiciones permitidas al médico:
 
@@ -1050,8 +1053,8 @@ Validaciones:
 | Método | Ruta | Acceso | Descripción |
 |---|---|---|---|
 | `POST` | `/pacientes/{id}/cuenta` | `cuentas:vincular` | Crea/vincula cuenta a paciente existente |
-| `POST` | `/pacientes/{id}/transferir` | `pacientes:transferir` | Cambia el médico tratante; exige `medico_destino_id`, motivo y `version` |
-| `GET` | `/pacientes/{id}/transferencias` | `pacientes:transferir` | Historial de transferencias internas |
+| `POST` | `/pacientes/{id}/transferir` | `pacientes:transferir` | Cambia el médico tratante; exige `medico_destino_id`, motivo y `version` (Fase 6) |
+| `GET` | `/pacientes/{id}/transferencias` | `pacientes:transferir` | Historial de transferencias internas (Fase 6) |
 | `POST` | `/medicos/{id}/cuenta` | `usuarios:escribir` | Crea/vincula cuenta de médico |
 | `GET` | `/medicos/{id}/horarios` | `agenda:gestionar` | Lista horarios |
 | `POST` | `/medicos/{id}/horarios` | `agenda:gestionar` | Crea horario |
@@ -1063,7 +1066,7 @@ Validaciones:
 | `DELETE` | `/medicos/{id}/bloqueos/{bloqueoId}` | `agenda:gestionar` | Elimina/cancela bloqueo |
 | `POST` | `/citas` | `citas:escribir` | Ya existe; recepción/admin agenda |
 | `PATCH` | `/citas/{id}/estado` | `citas:escribir` | Ya existe; administración |
-| `POST` | `/citas/{id}/sobrescribir-derivacion` | `derivaciones:sobrescribir` | Excepción auditada |
+| `POST` | `/citas/{id}/sobrescribir-derivacion` | `derivaciones:sobrescribir` | Excepción auditada (implementado en Fase 7) |
 | `GET` | `/derivaciones` | `derivaciones:leer` | Consulta administrativa |
 | `GET` | `/especialidades` | `especialidades:leer` | Ya existe; incluir flags |
 | `PUT` | `/especialidades/{id}` | `especialidades:escribir` | Cambiar `requiere_derivacion`, orden, duración |
@@ -1152,7 +1155,7 @@ Tareas:
 - Migración `011`: derivaciones, metadata de citas y nota mínima.
 - Migración `012`: solicitudes de vinculación.
 - Migración `013`: ownership del médico y retiro de permisos globales.
-- Migración `014` (P1): outbox de notificaciones.
+- Migración `017` (P1): outbox de notificaciones.
 - Crear entidades: `Derivacion`, `HorarioProfesional`, `BloqueoAgenda`, `NotaCita`, `TokenCuenta`, `Notificacion`.
 - Crear stores PostgreSQL correspondientes.
 - Actualizar stores existentes para `usuario_id`, `canal`, `derivacion_id`.
@@ -1198,7 +1201,7 @@ Tareas:
 - [x] Extender `/auth/me`.
 - [x] Implementar `GET/PUT /portal/perfil`.
 - [x] Implementar `GET /medico/agenda` básico.
-- [x] Aplicar filtros de ownership en citas y pacientes; derivaciones queda pendiente de su API en la Fase 6.
+- [x] Aplicar filtros de ownership en citas y pacientes; derivaciones y transferencia interna implementadas en la Fase 6.
 - [x] Retirar o neutralizar permisos globales del rol `medico`.
 - [x] Probar IDOR: paciente A contra paciente B; médico A contra médico B; paciente contra datos administrativos.
 - [x] Auditar accesos a datos propios y ajenos.
@@ -1249,47 +1252,51 @@ Tareas:
 
 ### Fase 6 — Flujo médico mínimo, derivaciones y transferencia interna
 
+**Estado:** completada (Paso 10).
+
 **Objetivo:** que el médico atienda y derive correctamente, y que administración pueda reasignar el médico tratante sin romper el ownership.
 
 Tareas:
 
-- `GET /medico/agenda` con filtros y ownership.
-- `PATCH /medico/citas/{id}/estado` con transiciones válidas.
-- `POST/PUT /medico/citas/{id}/nota`.
-- `POST /medico/citas/{id}/derivaciones`.
-- `GET /medico/derivaciones`.
-- Validar cita atendida, médico de origen, especialidad `MED-GEN`, especialidad destino y vigencia.
-- Crear derivación en estado `pendiente` con `vigente_hasta = now() + REFERRAL_VALID_DAYS`.
-- Auditar atención, nota y derivación.
-- Aplicar migración 015: `pacientes.medico_responsable_id`, historial `transferencias_paciente` y permiso `pacientes:transferir`.
-- `POST /pacientes/{id}/transferir` para `admin`/`recepción`, con `medico_destino_id`, motivo, `version` y auditoría.
-- `GET /pacientes/{id}/transferencias` para consultar el historial.
-- Extender `PerteneceAMedico` para incluir la asignación activa como relación de acceso.
-- Probar que un médico no puede derivar desde una cita ajena, no atendida o de otra especialidad.
-- Probar que un médico no puede transferirse pacientes a sí mismo ni leer pacientes sin asignación o cita.
+- [x] `GET /medico/agenda` con filtros y ownership.
+- [x] `PATCH /medico/citas/{id}/estado` con transiciones válidas.
+- [x] `POST/PUT /medico/citas/{id}/nota`.
+- [x] `POST /medico/citas/{id}/derivaciones`.
+- [x] `GET /medico/derivaciones`.
+- [x] Validar cita atendida, médico de origen, especialidad `MED-GEN`, especialidad destino y vigencia.
+- [x] Crear derivación en estado `pendiente` con `vigente_hasta = now() + REFERRAL_VALID_DAYS`.
+- [x] Auditar atención, nota y derivación.
+- [x] Aplicar migración 015: `pacientes.medico_responsable_id`, historial `transferencias_paciente` y permiso `pacientes:transferir`.
+- [x] `POST /pacientes/{id}/transferir` para `admin`/`recepción`, con `medico_destino_id`, motivo, `version` y auditoría.
+- [x] `GET /pacientes/{id}/transferencias` para consultar el historial.
+- [x] Extender `PerteneceAMedico` para incluir la asignación activa como relación de acceso.
+- [x] Probar que un médico no puede derivar desde una cita ajena, no atendida o de otra especialidad.
+- [x] Probar que un médico no puede transferirse pacientes a sí mismo ni leer pacientes sin asignación o cita.
 
 **Criterio de salida:** un médico de Medicina General atiende una cita y emite una derivación válida; un médico de otra especialidad no puede habilitar el acceso directo del portal; una transferencia interna cambia el acceso de forma auditada y el médico anterior no conserva acceso salvo por citas vigentes o atendidas.
 
 ### Fase 7 — Reserva de especialista con derivación
 
+**Estado:** completada (Paso 11).
+
 **Objetivo:** cerrar la regla central del requerimiento.
 
 Tareas:
 
-- `GET /portal/derivaciones` y detalle.
-- Mostrar al paciente la derivación vigente y su destino.
-- `POST /portal/citas` con `derivacion_id`.
-- Validación transaccional con `FOR UPDATE`.
-- Consumir la derivación y marcarla `agendada`.
-- Índice único parcial para impedir dos citas activas con la misma derivación.
-- Cancelación de cita de especialista: liberar la derivación a `pendiente` solo si se cancela con al menos `PORTAL_CANCEL_CUTOFF_HOURS=24` y sigue vigente.
-- Cancelación tardía: marcar la derivación `cancelada` con `motivo_cancelacion=cancelacion_tardia`; no reutilizable.
-- Reprogramación: mantener la misma derivación si no cambia de especialidad/médico y sigue vigente.
-- Marcar derivación `atendida` cuando la cita se atiende.
-- Job o consulta para marcar `vencida`.
-- No-show: consumir la derivación (`cancelada`, `motivo_cancelacion=no_show`); se requiere nueva valoración de Medicina General.
-- Sobrescritura administrativa solo para `admin` con `derivaciones:sobrescribir`, motivo y auditoría.
-- Prueba E2E completa.
+- [x] `GET /portal/derivaciones` y detalle.
+- [x] Mostrar al paciente la derivación vigente y su destino.
+- [x] `POST /portal/citas` con `derivacion_id`.
+- [x] Validación transaccional con `FOR UPDATE`.
+- [x] Consumir la derivación y marcarla `agendada`.
+- [x] Índice único parcial para impedir dos citas activas con la misma derivación.
+- [x] Cancelación de cita de especialista: liberar la derivación a `pendiente` solo si se cancela con al menos `PORTAL_CANCEL_CUTOFF_HOURS=24` y sigue vigente.
+- [x] Cancelación tardía: marcar la derivación `cancelada` con `motivo_cancelacion=cancelacion_tardia`; no reutilizable.
+- [x] Reprogramación: mantener la misma derivación si no cambia de especialidad/médico y sigue vigente.
+- [x] Marcar derivación `atendida` cuando la cita se atiende.
+- [x] Job o consulta para marcar `vencida` (`MarcarVencidas` se ejecuta en listado/detalle y reserva).
+- [x] No-show: consumir la derivación (`cancelada`, `motivo_cancelacion=no_show`); se requiere nueva valoración de Medicina General.
+- [x] Sobrescritura administrativa solo para `admin` con `derivaciones:sobrescribir`, motivo y auditoría.
+- [x] Prueba E2E completa.
 
 **Criterio de salida:** el paciente no puede saltarse la regla; la derivación se usa una sola vez; cancelar con 24 h o más la libera; cancelar tarde o no asistir la consume; una derivación vencida no permite reservar; la sobrescritura queda auditada y solo la ejecuta un admin.
 
@@ -2056,7 +2063,7 @@ Validación:
 - `docs/openapi.yaml` validado con Redocly sin errores de contrato (solo advertencias de estilo).
 - E2E sobre una base temporal migrada desde cero: se creó un médico y un horario, `/portal/disponibilidad` devolvió 2 slots en UTC, un bloqueo dejó 1, un solape de horario y un `version` obsoleto devolvieron `409`, la actualización correcta devolvió `200`, y al eliminar bloqueo/horario la disponibilidad volvió a 4/0 slots. La base temporal se eliminó al finalizar.
 
-**Pendiente inmediato:** Fase 6 (flujo médico, derivaciones y transferencia interna).
+**Pendiente inmediato:** Fase 8 (notificaciones y recordatorios).
 
 ### Paso 9 — Fase 5: agenda directa del paciente
 
@@ -2109,7 +2116,112 @@ No requiere migración nueva: reutiliza las columnas `canal`, `creada_por_usuari
 - `docs/openapi.yaml` validado con Redocly sin errores de contrato.
 - E2E sobre base temporal desde cero: paciente verificado agenda un slot de Medicina General (`201`, `confirmada`, canal `portal_paciente`), lista su cita, la reprograma (`200`, misma paciente/médico) y la cancela (`200`, motivo registrado); Cardiología devuelve `409 requiere_derivacion`. La base temporal se eliminó al finalizar.
 
-**Pendiente inmediato:** Fase 6 (flujo médico, derivaciones y transferencia interna).
+**Pendiente inmediato:** Fase 8 (notificaciones y recordatorios).
+
+### Paso 10 — Fase 6: flujo médico, derivaciones y transferencia interna
+
+**Estado:** completado.
+
+**Archivos principales:**
+
+- `migrations/015_transferencia_interna.sql`: `pacientes.medico_responsable_id`, `transferencias_paciente` y permiso `pacientes:transferir`.
+- `internal/service/medico_clinico_service.go`: estados clínicos, nota y derivaciones.
+- `internal/service/paciente_transfer_service.go`: transferencia interna con versión, motivo y auditoría.
+- `internal/repository/postgres/nota_cita_store.go`: nota única por cita.
+- `internal/repository/postgres/derivacion_store.go`: derivaciones y listado por médico de origen.
+- `internal/repository/postgres/transferencia_store.go`: reasignación transaccional e historial.
+- `internal/repository/postgres/paciente_store.go`: `PerteneceAMedico` incluye la asignación activa.
+- `internal/transport/http/medico_clinico_handler.go`, `paciente_transfer_handler.go`: endpoints y DTOs.
+- `docs/openapi.yaml`: contrato de los endpoints de la Fase 6.
+
+**Reglas implementadas:**
+
+- El médico solo puede cambiar estados de sus propias citas y solo a `confirmada`, `atendida` o `no_asistio`.
+- La nota solo se registra sobre una cita `atendida`; una cita tiene una única nota y las actualizaciones exigen `version`.
+- La derivación exige cita atendida, médico de origen `MED-GEN`, destino activo que requiera derivación y, si se elige, médico destino de esa especialidad.
+- La derivación inicia `pendiente` y vence a los `REFERRAL_VALID_DAYS` (default 90).
+- La transferencia exige `pacientes:transferir`, `medico_destino_id`, motivo y versión; admin/recepción la ejecutan.
+- Un médico no puede transferirse un paciente a sí mismo; el paciente no puede quedar asignado al mismo médico actual.
+- `PerteneceAMedico` considera citas `programada`/`confirmada`/`atendida` y la asignación activa `medico_responsable_id`.
+- El historial `transferencias_paciente` es inmutable y conserva médico anterior, médico nuevo, motivo, actor y fecha.
+
+**Pruebas añadidas:**
+
+- `TestMedicoClinicoCambiarEstadoSoloCitaPropia`
+- `TestMedicoClinicoNotaCreaYActualizaConVersion`
+- `TestMedicoClinicoNotaExigeCitaAtendida`
+- `TestMedicoClinicoCrearDerivacionValida`
+- `TestMedicoClinicoCrearDerivacionRechazaOrigenYDestinoInvalidos`
+- `TestMedicoClinicoListarDerivacionesFuerzaMedico`
+- `TestPacienteTransferServiceTransfiereConVersion`
+- `TestPacienteTransferServiceRechazaSinPermiso`
+- `TestPacienteTransferServiceRechazaAutoTransferencia`
+- `TestPacienteTransferServiceRechazaMismoResponsableYVersion`
+- `TestPacienteTransferServiceListaHistorial`
+- `TestNotaCitaStoreCreaYActualizaConVersion` (integración PostgreSQL)
+- `TestDerivacionStoreCreaYListaPorMedicoOrigen` (integración PostgreSQL)
+- `TestTransferenciaStoreCambiaResponsableYHistorial` (integración PostgreSQL)
+- `TestMigracionTransferenciaInterna` (integración PostgreSQL)
+
+**Validación realizada:**
+
+- `gofmt -l .` sin salida.
+- `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan.
+- Migración 015 aplicada a `medilist` y segunda ejecución idempotente.
+- `docs/openapi.yaml` validado con Redocly sin errores de contrato.
+- E2E sobre base temporal desde cero: médico de Medicina General marca `atendida`, crea nota, emite derivación a Otorrinolaringología; administración transfiere al paciente con historial; el médico nuevo accede por asignación y el anterior recibe `403` para un paciente sin cita ni asignación. La base temporal se eliminó al finalizar.
+
+**Pendiente inmediato:** Fase 8 (notificaciones y recordatorios).
+
+### Paso 11 — Fase 7: reserva de especialista con derivación
+
+**Estado:** completado.
+
+**Archivos principales:**
+
+- `internal/service/portal_cita_service.go`: reserva directa o con derivación, listado/detalle de derivaciones, cancelación con liberación/consumo y reprogramación.
+- `internal/repository/postgres/cita_store.go`: `CrearConDerivacion`, `CancelarConDerivacion` y `CambiarEstadoConDerivacion` con transacciones y bloqueo.
+- `internal/repository/postgres/derivacion_store.go`: listado por paciente y `MarcarVencidas`.
+- `internal/service/derivacion_admin_service.go`: excepción administrativa auditada.
+- `migrations/016_excepciones_derivacion.sql`: registro durable de la excepción, sin crear derivaciones falsas.
+- `internal/transport/http/portal_cita_handler.go`, `derivacion_admin_handler.go`: endpoints de portal y administración.
+- `docs/openapi.yaml`: contrato de la Fase 7.
+
+**Reglas implementadas:**
+
+- `POST /portal/citas` acepta `derivacion_id`; la especialidad directa lo rechaza y la especialista sin derivación devuelve `409 requiere_derivacion`.
+- La derivación debe pertenecer al paciente, estar pendiente, vigente, coincidir con la especialidad y, si tiene médico destino, con el médico seleccionado.
+- La cita y el paso de derivación a `agendada` se escriben en una transacción con `SELECT ... FOR UPDATE`; el índice parcial impide reutilizarla.
+- Cancelar con al menos `PORTAL_CANCEL_CUTOFF_HOURS` libera la derivación a `pendiente` si sigue vigente.
+- Cancelar tarde la consume como `cancelada` con `motivo_cancelacion=cancelacion_tardia`.
+- Marcar la cita como `no_asistio` consume la derivación con `motivo_cancelacion=no_show`.
+- Marcar la cita como `atendida` marca la derivación como `atendida`.
+- Reprogramar conserva la misma derivación si sigue vigente y no cambia paciente/médico/especialidad.
+- `MarcarVencidas` pasa derivaciones pendientes/agendadas vencidas a `vencida` al listar, detallar o reservar.
+- La excepción administrativa exige `admin` + `derivaciones:sobrescribir`, motivo y autorizador; no crea una derivación falsa.
+
+**Pruebas añadidas:**
+
+- `TestPortalCitaCrearEspecialistaConDerivacion`
+- `TestPortalCitaCrearEspecialistaSinDerivacion`
+- `TestPortalCitaCancelarEspecialistaRespetaDerivacion`
+- `TestDerivacionAdminSobrescribeSoloAdmin`
+- `TestDerivacionAdminRechazaCitaDirectaOConDerivacion`
+- `TestDerivacionStoreMarcaVencidasYListaPorPaciente` (integración PostgreSQL)
+- `TestCitaStoreReservaYConsumeDerivacion` (integración PostgreSQL)
+- `TestCitaStoreCancelarConDerivacionLiberaOConsume` (integración PostgreSQL)
+- `TestExcepcionDerivacionStoreRegistraAutorizacion` (integración PostgreSQL)
+- E2E de portal con derivación, liberación, reprogramación, cancelación tardía, no-show y excepción administrativa.
+
+**Validación realizada:**
+
+- `gofmt -l .` sin salida.
+- `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan.
+- Migración 016 aplicada a `medilist`.
+- `docs/openapi.yaml` validado con Redocly sin errores de contrato.
+- E2E sobre base temporal desde cero: derivación visible, reserva de especialista `201`, derivación `agendada`, cancelación temprana la deja `pendiente`, reprogramación la conserva, cancelación tardía la deja `cancelada/cancelacion_tardia`, no-show `cancelada/no_show` y excepción administrativa registrada. La base temporal se eliminó al finalizar.
+
+**Pendiente inmediato:** Fase 8 (notificaciones y recordatorios).
 
 
 

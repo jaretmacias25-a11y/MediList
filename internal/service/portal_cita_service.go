@@ -26,6 +26,7 @@ type PortalCitaInput struct {
 	FechaHoraInicio time.Time
 	Tipo            entities.TipoCita
 	Motivo          string
+	DerivacionID    *int64
 }
 
 // PortalCitaReprogramarInput solo permite cambiar el slot y, opcionalmente,
@@ -42,6 +43,7 @@ type PortalCitaService struct {
 	citas        CitaStore
 	pacientes    PacienteStore
 	medicos      MedicoStore
+	derivaciones DerivacionStore
 	slots        SlotValidator
 	email        EmailSender
 	cancelCutoff time.Duration
@@ -54,6 +56,7 @@ func NewPortalCitaService(
 	citas CitaStore,
 	pacientes PacienteStore,
 	medicos MedicoStore,
+	derivaciones DerivacionStore,
 	slots SlotValidator,
 	cfg PortalCitaConfig,
 	email ...EmailSender,
@@ -74,6 +77,7 @@ func NewPortalCitaService(
 		citas:        citas,
 		pacientes:    pacientes,
 		medicos:      medicos,
+		derivaciones: derivaciones,
 		slots:        slots,
 		email:        notificador,
 		cancelCutoff: cutoff,
@@ -96,9 +100,25 @@ func (s *PortalCitaService) Crear(
 	if in.FechaHoraInicio.IsZero() {
 		return nil, entities.NewValidationError("fecha_hora_inicio es obligatoria (formato RFC3339)")
 	}
-	medico, err := s.validarMedicoDirecto(ctx, in.MedicoID)
+	medico, err := s.medicoPortalDisponible(ctx, in.MedicoID)
 	if err != nil {
 		return nil, err
+	}
+	if in.DerivacionID == nil && medico.Especialidad.RequiereDerivacion {
+		return nil, fmt.Errorf(
+			"%w: la especialidad %s requiere una derivación vigente",
+			entities.ErrRequiereDerivacion, medico.Especialidad.Nombre)
+	}
+	if in.DerivacionID != nil {
+		if !medico.Especialidad.RequiereDerivacion {
+			return nil, entities.NewValidationError(
+				"la especialidad seleccionada no requiere derivación")
+		}
+		if _, err := s.validarDerivacionReserva(
+			ctx, *in.DerivacionID, paciente.ID, medico, false,
+		); err != nil {
+			return nil, err
+		}
 	}
 	tipo, err := tipoCitaPortal(in.Tipo)
 	if err != nil {
@@ -131,8 +151,13 @@ func (s *PortalCitaService) Crear(
 		Estado:             estado,
 		Canal:              entities.CanalCitaPortalPaciente,
 		CreadaPorUsuarioID: &usuarioID,
+		DerivacionID:       in.DerivacionID,
 	}
-	if err := s.citas.Crear(ctx, cita); err != nil {
+	if in.DerivacionID != nil {
+		if err := s.citas.CrearConDerivacion(ctx, cita, *in.DerivacionID); err != nil {
+			return nil, err
+		}
+	} else if err := s.citas.Crear(ctx, cita); err != nil {
 		return nil, err
 	}
 	creada, err := s.citas.ObtenerPorID(ctx, cita.ID)
@@ -215,8 +240,19 @@ func (s *PortalCitaService) Reprogramar(
 	if in.FechaHoraInicio.IsZero() {
 		return nil, entities.NewValidationError("fecha_hora_inicio es obligatoria (formato RFC3339)")
 	}
-	if _, err := s.validarMedicoDirecto(ctx, cita.MedicoID); err != nil {
+	medico, err := s.medicoPortalDisponible(ctx, cita.MedicoID)
+	if err != nil {
 		return nil, err
+	}
+	if cita.DerivacionID != nil {
+		if _, err := s.validarDerivacionReserva(
+			ctx, *cita.DerivacionID, cita.PacienteID, medico, true,
+		); err != nil {
+			return nil, err
+		}
+	} else if medico.Especialidad.RequiereDerivacion {
+		return nil, fmt.Errorf(
+			"%w: la cita no tiene una derivación asociada", entities.ErrRequiereDerivacion)
 	}
 	slot, err := s.slots.ValidarSlot(ctx, cita.MedicoID, in.FechaHoraInicio, 0)
 	if err != nil {
@@ -263,7 +299,9 @@ func (s *PortalCitaService) Cancelar(
 		return nil, entities.NewValidationError(
 			"la cita está en estado %s y no puede cancelarse", cita.Estado)
 	}
-	if s.cancelCutoff > 0 && s.now().Add(s.cancelCutoff).After(cita.FechaHoraInicio) {
+	late := s.cancelCutoff > 0 &&
+		s.now().Add(s.cancelCutoff).After(cita.FechaHoraInicio)
+	if late && cita.DerivacionID == nil {
 		return nil, fmt.Errorf(
 			"%w: la cita está fuera del plazo de cancelación de %s",
 			entities.ErrConflict, s.cancelCutoff)
@@ -278,16 +316,26 @@ func (s *PortalCitaService) Cancelar(
 
 	cita.Estado = entities.EstadoCitaCancelada
 	cita.MotivoCancelacion = motivo
-	if err := s.citas.Cancelar(ctx, cita); err != nil {
+	var errCancelar error
+	if cita.DerivacionID != nil {
+		motivoDerivacion := ""
+		if late {
+			motivoDerivacion = "cancelacion_tardia"
+		}
+		errCancelar = s.citas.CancelarConDerivacion(ctx, cita, !late, motivoDerivacion)
+	} else {
+		errCancelar = s.citas.Cancelar(ctx, cita)
+	}
+	if errCancelar != nil {
 		// Si otra solicitud canceló la cita entre la lectura y la escritura,
 		// la operación es idempotente.
-		if errors.Is(err, entities.ErrConflict) {
+		if errors.Is(errCancelar, entities.ErrConflict) {
 			reciente, errLectura := s.citas.ObtenerPorID(ctx, citaID)
 			if errLectura == nil && reciente.Estado == entities.EstadoCitaCancelada {
 				return reciente, nil
 			}
 		}
-		return nil, err
+		return nil, errCancelar
 	}
 	return s.citas.ObtenerPorID(ctx, citaID)
 }
@@ -336,7 +384,7 @@ func (s *PortalCitaService) citaPropia(
 	return cita, nil
 }
 
-func (s *PortalCitaService) validarMedicoDirecto(
+func (s *PortalCitaService) medicoPortalDisponible(
 	ctx context.Context,
 	medicoID int64,
 ) (*entities.Medico, error) {
@@ -351,12 +399,108 @@ func (s *PortalCitaService) validarMedicoDirecto(
 		return nil, fmt.Errorf(
 			"%w: el médico no está disponible para reservas del portal", entities.ErrNotFound)
 	}
-	if medico.Especialidad.RequiereDerivacion {
-		return nil, fmt.Errorf(
-			"%w: la especialidad %s no es de acceso directo",
-			entities.ErrRequiereDerivacion, medico.Especialidad.Nombre)
-	}
 	return medico, nil
+}
+
+func (s *PortalCitaService) validarDerivacionReserva(
+	ctx context.Context,
+	derivacionID, pacienteID int64,
+	medico *entities.Medico,
+	permitirAgendada bool,
+) (*entities.Derivacion, error) {
+	if derivacionID <= 0 {
+		return nil, entities.NewValidationError("derivacion_id no es válido")
+	}
+	if s.derivaciones == nil {
+		return nil, fmt.Errorf("%w: no hay almacén de derivaciones disponible", entities.ErrConflict)
+	}
+	if err := s.derivaciones.MarcarVencidas(ctx, s.now()); err != nil {
+		return nil, err
+	}
+	derivacion, err := s.derivaciones.ObtenerPorID(ctx, derivacionID)
+	if err != nil {
+		if errors.Is(err, entities.ErrNotFound) {
+			return nil, fmt.Errorf(
+				"%w: la derivación %d no existe o no está disponible",
+				entities.ErrConflict, derivacionID)
+		}
+		return nil, err
+	}
+	if derivacion.PacienteID != pacienteID {
+		return nil, fmt.Errorf(
+			"%w: la derivación no pertenece al paciente autenticado", entities.ErrForbidden)
+	}
+	if derivacion.EspecialidadDestinoID != medico.EspecialidadID {
+		return nil, fmt.Errorf(
+			"%w: la especialidad de la derivación no coincide con el médico seleccionado",
+			entities.ErrConflict)
+	}
+	if derivacion.MedicoDestinoID != nil && *derivacion.MedicoDestinoID != medico.ID {
+		return nil, fmt.Errorf(
+			"%w: la derivación está dirigida a otro médico", entities.ErrConflict)
+	}
+	estadoPermitido := derivacion.Estado == entities.EstadoDerivacionPendiente ||
+		(permitirAgendada && derivacion.Estado == entities.EstadoDerivacionAgendada)
+	if !estadoPermitido {
+		return nil, fmt.Errorf(
+			"%w: la derivación no está disponible para reservar (estado: %s)",
+			entities.ErrConflict, derivacion.Estado)
+	}
+	if !derivacion.VigenteHasta.After(s.now()) {
+		return nil, fmt.Errorf("%w: la derivación está vencida", entities.ErrConflict)
+	}
+	return derivacion, nil
+}
+
+// ListarDerivaciones devuelve solo las derivaciones del paciente autenticado.
+func (s *PortalCitaService) ListarDerivaciones(
+	ctx context.Context,
+	actor *Actor,
+	opts entities.ListOptions,
+) ([]entities.Derivacion, error) {
+	paciente, err := s.pacientePropio(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	if s.derivaciones == nil {
+		return nil, fmt.Errorf("%w: no hay almacén de derivaciones disponible", entities.ErrConflict)
+	}
+	if err := s.derivaciones.MarcarVencidas(ctx, s.now()); err != nil {
+		return nil, err
+	}
+	opts = opts.Normalized()
+	opts.Search = strings.TrimSpace(opts.Search)
+	return s.derivaciones.ListarPorPaciente(ctx, paciente.ID, opts)
+}
+
+// ObtenerDerivacion devuelve una derivación solo si pertenece al paciente.
+func (s *PortalCitaService) ObtenerDerivacion(
+	ctx context.Context,
+	actor *Actor,
+	derivacionID int64,
+) (*entities.Derivacion, error) {
+	if derivacionID <= 0 {
+		return nil, entities.NewValidationError("id de derivación inválido")
+	}
+	paciente, err := s.pacientePropio(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	if s.derivaciones == nil {
+		return nil, fmt.Errorf("%w: no hay almacén de derivaciones disponible", entities.ErrConflict)
+	}
+	if err := s.derivaciones.MarcarVencidas(ctx, s.now()); err != nil {
+		return nil, err
+	}
+	derivacion, err := s.derivaciones.ObtenerPorID(ctx, derivacionID)
+	if err != nil {
+		return nil, err
+	}
+	if derivacion.PacienteID != paciente.ID {
+		return nil, fmt.Errorf(
+			"%w: la derivación no pertenece al paciente autenticado", entities.ErrForbidden)
+	}
+	return derivacion, nil
 }
 
 func tipoCitaPortal(tipo entities.TipoCita) (entities.TipoCita, error) {

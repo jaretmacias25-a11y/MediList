@@ -13,25 +13,28 @@ import (
 
 // Dependencies agrupa los servicios que consume la capa de transporte.
 type Dependencies struct {
-	Especialidades *service.EspecialidadService
-	Pacientes      *service.PacienteService
-	Medicos        *service.MedicoService
-	Citas          *service.CitaService
-	Auth           *service.AuthService
-	Usuarios       *service.UsuarioService
-	Cuentas        *service.CuentaService
-	PortalPaciente *service.PortalPacienteService
-	MedicoPortal   *service.MedicoPortalService
-	Agenda         *service.AgendaService
-	Catalogo       *service.CatalogoService
-	Disponibilidad *service.DisponibilidadService
-	PortalCitas    *service.PortalCitaService
-	Auditoria      *service.AuditoriaService
-	AuditoriaStore service.AuditoriaStore
-	ActorStore     service.ActorStore
-	Errores        *service.ErrorService
-	DB             *pgxpool.Pool
-	Logger         *slog.Logger
+	Especialidades   *service.EspecialidadService
+	Pacientes        *service.PacienteService
+	Medicos          *service.MedicoService
+	Citas            *service.CitaService
+	Auth             *service.AuthService
+	Usuarios         *service.UsuarioService
+	Cuentas          *service.CuentaService
+	PortalPaciente   *service.PortalPacienteService
+	MedicoPortal     *service.MedicoPortalService
+	Agenda           *service.AgendaService
+	Catalogo         *service.CatalogoService
+	Disponibilidad   *service.DisponibilidadService
+	PortalCitas      *service.PortalCitaService
+	MedicoClinico    *service.MedicoClinicoService
+	PacienteTransfer *service.PacienteTransferService
+	DerivacionAdmin  *service.DerivacionAdminService
+	Auditoria        *service.AuditoriaService
+	AuditoriaStore   service.AuditoriaStore
+	ActorStore       service.ActorStore
+	Errores          *service.ErrorService
+	DB               *pgxpool.Pool
+	Logger           *slog.Logger
 }
 
 // NewRouter construye el enrutador HTTP con todas las dependencias inyectadas.
@@ -88,6 +91,11 @@ func NewRouter(d Dependencies) http.Handler {
 	staffWrite("PUT /api/v1/pacientes/{id}", "pacientes:escribir", ph.Actualizar)
 	staffWrite("DELETE /api/v1/pacientes/{id}", "pacientes:escribir", ph.Eliminar)
 
+	pth := NewPacienteTransferHandler(d.PacienteTransfer, d.Logger)
+	staffWrite("POST /api/v1/pacientes/{id}/transferir", "pacientes:transferir", pth.Transferir)
+	staffRead("GET /api/v1/pacientes/{id}/transferencias", "pacientes:transferir",
+		"consultar_transferencias", "transferencias_paciente", pth.ListarTransferencias)
+
 	mh := NewMedicoHandler(d.Medicos, d.Logger)
 	protegido("GET /api/v1/medicos", "medicos:leer", mh.Listar)
 	protegido("GET /api/v1/medicos/{id}", "medicos:leer", mh.Obtener)
@@ -112,6 +120,11 @@ func NewRouter(d Dependencies) http.Handler {
 	staffWrite("PUT /api/v1/citas/{id}", "citas:escribir", ch.Actualizar)
 	staffWrite("PATCH /api/v1/citas/{id}/estado", "citas:escribir", ch.CambiarEstado)
 	staffWrite("DELETE /api/v1/citas/{id}", "citas:escribir", ch.Eliminar)
+
+	dah := NewDerivacionAdminHandler(d.DerivacionAdmin, d.Logger)
+	mux.Handle("POST /api/v1/citas/{id}/sobrescribir-derivacion", auth.Require("derivaciones:sobrescribir",
+		auditMutations(d.AuditoriaStore, d.Logger,
+			soloAdmin(http.HandlerFunc(dah.Sobrescribir)))))
 
 	portalHandler := NewPortalHandler(d.PortalPaciente, d.Logger)
 	mux.Handle("GET /api/v1/portal/perfil", auth.Require("portal:perfil:leer",
@@ -138,6 +151,12 @@ func NewRouter(d Dependencies) http.Handler {
 		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalCitaHandler.Reprogramar))))
 	mux.Handle("POST /api/v1/portal/citas/{id}/cancelar", auth.Require("portal:citas:escribir",
 		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalCitaHandler.Cancelar))))
+	mux.Handle("GET /api/v1/portal/derivaciones", auth.Require("portal:derivaciones:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_derivaciones_propias", "derivaciones",
+			http.HandlerFunc(portalCitaHandler.ListarDerivaciones))))
+	mux.Handle("GET /api/v1/portal/derivaciones/{id}", auth.Require("portal:derivaciones:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_derivacion_propia", "derivaciones",
+			http.HandlerFunc(portalCitaHandler.ObtenerDerivacion))))
 
 	medicoPortalHandler := NewMedicoPortalHandler(d.MedicoPortal, d.Logger)
 	mux.Handle("GET /api/v1/medico/agenda", auth.Require("medico:agenda:leer",
@@ -149,6 +168,22 @@ func NewRouter(d Dependencies) http.Handler {
 	mux.Handle("GET /api/v1/medico/pacientes/{id}", auth.Require("pacientes:atendidos:leer",
 		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_paciente_atendido", "pacientes",
 			http.HandlerFunc(medicoPortalHandler.ObtenerPaciente))))
+
+	mch := NewMedicoClinicoHandler(d.MedicoClinico, d.Logger)
+	mux.Handle("PATCH /api/v1/medico/citas/{id}/estado", auth.Require("medico:agenda:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(mch.CambiarEstado))))
+	mux.Handle("GET /api/v1/medico/citas/{id}/nota", auth.Require("medico:nota:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_nota_propia", "notas_cita",
+			http.HandlerFunc(mch.ObtenerNota))))
+	mux.Handle("POST /api/v1/medico/citas/{id}/nota", auth.Require("medico:nota:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(mch.GuardarNota))))
+	mux.Handle("PUT /api/v1/medico/citas/{id}/nota", auth.Require("medico:nota:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(mch.GuardarNota))))
+	mux.Handle("POST /api/v1/medico/citas/{id}/derivaciones", auth.Require("derivaciones:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(mch.CrearDerivacion))))
+	mux.Handle("GET /api/v1/medico/derivaciones", auth.Require("derivaciones:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_derivaciones_propias", "derivaciones",
+			http.HandlerFunc(mch.ListarDerivaciones))))
 
 	uh := NewUsuarioHandler(d.Usuarios, d.Logger)
 	protegido("GET /api/v1/usuarios", "usuarios:leer", uh.Listar)

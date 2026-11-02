@@ -44,6 +44,7 @@ func configValidaParaPruebas() Config {
 		PortalMaxAdvanceDays:      90,
 		PortalCancelCutoffHours:   24,
 		AutoConfirmPortalBookings: true,
+		ReferralValidDays:         90,
 	}
 }
 
@@ -143,6 +144,12 @@ func TestValidateZonaHorariaYHorizonteDelPortal(t *testing.T) {
 	cfg.PortalCancelCutoffHours = 721
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("el corte de cancelación fuera de rango debe rechazarse")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.ReferralValidDays = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("la vigencia de derivación debe ser al menos un día")
 	}
 }
 

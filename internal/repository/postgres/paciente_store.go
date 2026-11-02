@@ -23,7 +23,8 @@ func NewPacienteStore(db *pgxpool.Pool) *PacienteStore {
 
 const pacienteSelect = `
 	SELECT
-		p.id, p.usuario_id, p.numero_historia, p.grupo_sanguineo, p.factor_rh,
+		p.id, p.usuario_id, p.medico_responsable_id,
+		p.numero_historia, p.grupo_sanguineo, p.factor_rh,
 		p.contacto_emergencia_nombre, p.contacto_emergencia_telefono,
 		p.activo, p.version, p.created_at, p.updated_at,
 		pe.id, pe.tipo_documento, pe.numero_documento, pe.nombres, pe.apellidos,
@@ -207,6 +208,12 @@ func (s *PacienteStore) PerteneceAMedico(ctx context.Context, pacienteID, medico
 			WHERE paciente_id = $1
 			  AND medico_id = $2
 			  AND estado IN ('programada', 'confirmada', 'atendida')
+		) OR EXISTS (
+			SELECT 1
+			FROM pacientes p
+			WHERE p.id = $1
+			  AND p.medico_responsable_id = $2
+			  AND p.activo
 		)`
 	var existe bool
 	if err := s.db.QueryRow(ctx, q, pacienteID, medicoID).Scan(&existe); err != nil {
@@ -232,9 +239,10 @@ func (s *PacienteStore) Eliminar(ctx context.Context, id int64) error {
 
 func scanPaciente(row rowScanner) (*entities.Paciente, error) {
 	var p entities.Paciente
-	var usuarioID pgtype.Int8
+	var usuarioID, medicoResponsableID pgtype.Int8
 	err := row.Scan(
-		&p.ID, &usuarioID, &p.NumeroHistoria, &p.GrupoSanguineo, &p.FactorRH,
+		&p.ID, &usuarioID, &medicoResponsableID,
+		&p.NumeroHistoria, &p.GrupoSanguineo, &p.FactorRH,
 		&p.ContactoEmergenciaNombre, &p.ContactoEmergenciaTelefono,
 		&p.Activo, &p.Version, &p.CreatedAt, &p.UpdatedAt,
 		&p.Persona.ID, &p.Persona.TipoDocumento, &p.Persona.NumeroDocumento,
@@ -247,6 +255,10 @@ func scanPaciente(row rowScanner) (*entities.Paciente, error) {
 	if usuarioID.Valid {
 		id := usuarioID.Int64
 		p.UsuarioID = &id
+	}
+	if medicoResponsableID.Valid {
+		id := medicoResponsableID.Int64
+		p.MedicoResponsableID = &id
 	}
 	return &p, nil
 }

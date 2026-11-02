@@ -11,12 +11,14 @@ import (
 
 type fakePortalCitaStore struct {
 	CitaStore
-	citas       map[int64]*entities.Cita
-	creada      *entities.Cita
-	actualizada *entities.Cita
-	cancelada   *entities.Cita
-	filtro      entities.CitaFiltro
-	listado     []entities.Cita
+	citas             map[int64]*entities.Cita
+	creada            *entities.Cita
+	actualizada       *entities.Cita
+	cancelada         *entities.Cita
+	filtro            entities.CitaFiltro
+	listado           []entities.Cita
+	liberarDerivacion bool
+	motivoDerivacion  string
 }
 
 func (f *fakePortalCitaStore) Crear(_ context.Context, c *entities.Cita) error {
@@ -28,6 +30,42 @@ func (f *fakePortalCitaStore) Crear(_ context.Context, c *entities.Cita) error {
 	c.Version = 1
 	f.creada = c
 	f.citas[c.ID] = c
+	return nil
+}
+
+func (f *fakePortalCitaStore) CrearConDerivacion(
+	_ context.Context, c *entities.Cita, derivacionID int64,
+) error {
+	c.DerivacionID = &derivacionID
+	return f.Crear(context.Background(), c)
+}
+
+func (f *fakePortalCitaStore) CancelarConDerivacion(
+	_ context.Context, c *entities.Cita, liberar bool, motivoDerivacion string,
+) error {
+	c.Version++
+	c.Estado = entities.EstadoCitaCancelada
+	f.cancelada = c
+	f.liberarDerivacion = liberar
+	f.motivoDerivacion = motivoDerivacion
+	if f.citas == nil {
+		f.citas = make(map[int64]*entities.Cita)
+	}
+	f.citas[c.ID] = c
+	return nil
+}
+
+func (f *fakePortalCitaStore) CambiarEstadoConDerivacion(
+	_ context.Context, c *entities.Cita, estado entities.EstadoDerivacion, motivo string,
+) error {
+	c.Version++
+	f.actualizada = c
+	if f.citas == nil {
+		f.citas = make(map[int64]*entities.Cita)
+	}
+	f.citas[c.ID] = c
+	_ = estado
+	_ = motivo
 	return nil
 }
 
@@ -168,6 +206,7 @@ func nuevoServicioPortalCitaPrueba(
 		citas,
 		&fakePacienteStorePortalCita{paciente: paciente},
 		&fakeMedicoStorePortalCita{medico: medico},
+		&fakeDerivacionStore{},
 		slots,
 		PortalCitaConfig{
 			CancelCutoff: 24 * time.Hour,
@@ -226,6 +265,7 @@ func TestPortalCitaCrearEscribeConfirmacionBasica(t *testing.T) {
 		citas,
 		&fakePacienteStorePortalCita{paciente: pacientePortalCita(10, 20)},
 		&fakeMedicoStorePortalCita{medico: medicoPortalCita()},
+		&fakeDerivacionStore{},
 		&fakeSlotValidatorPortal{slot: slotPortalCita(inicio)},
 		PortalCitaConfig{Now: func() time.Time { return ahora }, AutoConfirm: true},
 		emails,
@@ -243,6 +283,125 @@ func TestPortalCitaCrearEscribeConfirmacionBasica(t *testing.T) {
 	}
 	if emails.enviados[0].destino != "paciente@example.test" {
 		t.Fatalf("destino de confirmación inesperado: %s", emails.enviados[0].destino)
+	}
+}
+
+func TestPortalCitaCrearEspecialistaConDerivacion(t *testing.T) {
+	ahora := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	inicio := time.Date(2026, 11, 9, 14, 0, 0, 0, time.UTC)
+	medico := medicoPortalCita()
+	medico.EspecialidadID = 9
+	medico.Especialidad = entities.Especialidad{
+		ID: 9, Codigo: "OTORRINO", Nombre: "Otorrinolaringología",
+		Activa: true, RequiereDerivacion: true,
+	}
+	medicoID := medico.ID
+	derivacion := &entities.Derivacion{
+		ID:                    80,
+		PacienteID:            20,
+		EspecialidadDestinoID: 9,
+		MedicoDestinoID:       &medicoID,
+		Estado:                entities.EstadoDerivacionPendiente,
+		VigenteHasta:          ahora.AddDate(0, 0, 30),
+	}
+	derivaciones := &fakeDerivacionStore{porID: map[int64]*entities.Derivacion{80: derivacion}}
+	citas := &fakePortalCitaStore{}
+	svc := NewPortalCitaService(
+		citas,
+		&fakePacienteStorePortalCita{paciente: pacientePortalCita(10, 20)},
+		&fakeMedicoStorePortalCita{medico: medico},
+		derivaciones,
+		&fakeSlotValidatorPortal{slot: slotPortalCita(inicio)},
+		PortalCitaConfig{Now: func() time.Time { return ahora }, AutoConfirm: true},
+	)
+	derivacionID := int64(80)
+
+	cita, err := svc.Crear(context.Background(), actorPortalCita(10, 20), PortalCitaInput{
+		MedicoID:        7,
+		FechaHoraInicio: inicio,
+		Motivo:          "Evaluación ORL",
+		DerivacionID:    &derivacionID,
+	})
+	if err != nil {
+		t.Fatalf("crear cita de especialista: %v", err)
+	}
+	if cita.DerivacionID == nil || *cita.DerivacionID != 80 {
+		t.Fatalf("derivación no asociada: %v", cita.DerivacionID)
+	}
+	if citas.creada.Canal != entities.CanalCitaPortalPaciente {
+		t.Fatalf("canal inesperado: %s", citas.creada.Canal)
+	}
+}
+
+func TestPortalCitaCrearEspecialistaSinDerivacion(t *testing.T) {
+	ahora := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	inicio := time.Date(2026, 11, 9, 14, 0, 0, 0, time.UTC)
+	medico := medicoPortalCita()
+	medico.EspecialidadID = 9
+	medico.Especialidad = entities.Especialidad{
+		ID: 9, Codigo: "OTORRINO", Nombre: "Otorrinolaringología",
+		Activa: true, RequiereDerivacion: true,
+	}
+	svc := NewPortalCitaService(
+		&fakePortalCitaStore{},
+		&fakePacienteStorePortalCita{paciente: pacientePortalCita(10, 20)},
+		&fakeMedicoStorePortalCita{medico: medico},
+		&fakeDerivacionStore{},
+		&fakeSlotValidatorPortal{slot: slotPortalCita(inicio)},
+		PortalCitaConfig{Now: func() time.Time { return ahora }, AutoConfirm: true},
+	)
+	_, err := svc.Crear(context.Background(), actorPortalCita(10, 20), PortalCitaInput{
+		MedicoID:        7,
+		FechaHoraInicio: inicio,
+	})
+	if !errors.Is(err, entities.ErrRequiereDerivacion) {
+		t.Fatalf("se esperaba ErrRequiereDerivacion, obtenido %v", err)
+	}
+}
+
+func TestPortalCitaCancelarEspecialistaRespetaDerivacion(t *testing.T) {
+	ahora := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	casos := []struct {
+		nombre  string
+		inicio  time.Time
+		liberar bool
+		motivo  string
+	}{
+		{"antes del corte", ahora.Add(48 * time.Hour), true, ""},
+		{"después del corte", ahora.Add(2 * time.Hour), false, "cancelacion_tardia"},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			derivacionID := int64(80)
+			cita := &entities.Cita{
+				ID:              5,
+				PacienteID:      20,
+				MedicoID:        7,
+				FechaHoraInicio: caso.inicio,
+				Estado:          entities.EstadoCitaProgramada,
+				DerivacionID:    &derivacionID,
+				Version:         1,
+			}
+			citas := &fakePortalCitaStore{citas: map[int64]*entities.Cita{5: cita}}
+			svc := NewPortalCitaService(
+				citas,
+				&fakePacienteStorePortalCita{paciente: pacientePortalCita(10, 20)},
+				&fakeMedicoStorePortalCita{medico: medicoPortalCita()},
+				&fakeDerivacionStore{},
+				&fakeSlotValidatorPortal{},
+				PortalCitaConfig{
+					CancelCutoff: 24 * time.Hour,
+					Now:          func() time.Time { return ahora },
+				},
+			)
+			if _, err := svc.Cancelar(context.Background(), actorPortalCita(10, 20), 5, "Paciente"); err != nil {
+				t.Fatalf("cancelar cita de especialista: %v", err)
+			}
+			if citas.liberarDerivacion != caso.liberar || citas.motivoDerivacion != caso.motivo {
+				t.Fatalf("política de derivación inesperada: liberar=%v motivo=%q",
+					citas.liberarDerivacion, citas.motivoDerivacion)
+			}
+		})
 	}
 }
 

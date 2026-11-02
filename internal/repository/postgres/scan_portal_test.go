@@ -85,7 +85,7 @@ func TestScanUsuarioIncluyeCamposDeCuenta(t *testing.T) {
 
 func valoresPaciente(usuarioID pgtype.Int8) []any {
 	return []any{
-		int64(11), usuarioID, "HC-000011", "O", "+",
+		int64(11), usuarioID, pgtype.Int8{}, "HC-000011", "O", "+",
 		"Contacto", "0999999999",
 		true, int64(2),
 		time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC),

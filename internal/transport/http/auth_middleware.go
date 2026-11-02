@@ -125,6 +125,22 @@ func soloPersonalAdministrativo(next http.Handler) http.Handler {
 	})
 }
 
+func soloAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor := actorFromContext(r.Context())
+		if actor == nil {
+			writeUnauthorized(w)
+			return
+		}
+		if !actor.TieneRol("admin") {
+			writeError(w, http.StatusForbidden, "forbidden",
+				"esta operación excepcional requiere rol admin")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Bearer realm="medilist"`)
 	writeError(w, http.StatusUnauthorized, "unauthorized", "token de acceso ausente, inválido o expirado")
