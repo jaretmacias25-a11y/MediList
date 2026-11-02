@@ -2,7 +2,7 @@
 
 Backend en **Go** para la gestión de pacientes, médicos, especialidades y citas de una clínica. Implementa una **arquitectura limpia por capas** con persistencia en **PostgreSQL**, autenticación **JWT**, control de acceso basado en roles (**RBAC**), cuentas de paciente con verificación de email, vinculación con historias existentes y auditoría de seguridad.
 
-El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente (registro, verificación de email, recuperación de contraseña y vinculación con historias existentes), la Fase 3 de autorización por actor y la Fase 4 de catálogo, horarios y disponibilidad: CRUD administrativo de horarios/bloqueos, perfil público del médico, cálculo de slots en zona horaria de la clínica y endpoints de catálogo/disponibilidad para el portal.
+El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente (registro, verificación de email, recuperación de contraseña y vinculación con historias existentes), la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, y la Fase 5 de agenda directa del paciente: reserva de las cinco especialidades de acceso directo, listado/detalle propio, reprogramación con versión y cancelación con política configurable.
 
 ---
 
@@ -53,6 +53,7 @@ MediList/
 │   │   ├── agenda_service.go           # CRUD de horarios y bloqueos
 │   │   ├── disponibilidad_service.go   # generación de slots y reglas de reserva
 │   │   ├── catalogo_service.go         # catálogo público del portal
+│   │   ├── portal_cita_service.go      # reserva, reprogramación y cancelación propias
 │   │   ├── cuenta_service.go           # registro, verificación, reset y vinculación
 │   │   ├── error_service.go            # errores agregados (stdout + PostgreSQL)
 │   │   ├── retention_service.go        # retención de errores y auditoría
@@ -83,6 +84,7 @@ MediList/
 │       ├── medico_portal_handler.go    # agenda y pacientes propios del médico
 │       ├── agenda_handler.go           # horarios y bloqueos administrativos
 │       ├── catalogo_handler.go         # catálogo y disponibilidad del portal
+│       ├── portal_cita_handler.go      # citas propias del paciente
 │       ├── request_context.go          # X-Request-ID, traceparent y trace_id
 │       ├── report_error.go             # envío de errores a la agregación
 │       ├── rate_limit.go               # límite de intentos por IP
@@ -187,6 +189,8 @@ MediList/
    CLINIC_TIMEZONE=America/Guayaquil
    PORTAL_MIN_NOTICE_HOURS=2
    PORTAL_MAX_ADVANCE_DAYS=90
+   PORTAL_CANCEL_CUTOFF_HOURS=24
+   AUTO_CONFIRM_PORTAL_BOOKINGS=true
    ```
 
    Reemplaza `postgres` y `TU_PASSWORD_LOCAL` por el usuario y la contraseña que tengas configurados en tu propia instalación local de PostgreSQL. No publiques contraseñas reales en el README ni en archivos versionados.
@@ -458,7 +462,7 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 | `recepcion` | Gestión de pacientes, agenda y vinculación de cuentas |
 | `enfermeria` | Consulta de pacientes, médicos y citas |
 | `auditor` | Consulta de usuarios, roles y auditoría |
-| `paciente` | Cuenta propia y perfil de portal; agenda de portal en la Fase 5 |
+| `paciente` | Cuenta propia, perfil y agenda de citas propias |
 
 ### Matriz de permisos
 
@@ -477,6 +481,7 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 | Agenda administrativa (horarios/bloqueos) | Sí | No | Sí | No | No | No |
 | Catálogo de portal | Sí | No | No | No | No | Sí |
 | Disponibilidad de portal | Sí | No | No | No | No | Sí |
+| Citas propias del portal | Sí | No | No | No | No | Sí |
 | Cuentas (vincular) | Sí | No | Sí | No | No | No |
 | Usuarios (leer) | Sí | No | No | No | Sí | No |
 | Usuarios (escribir) | Sí | No | No | No | No | No |
@@ -484,7 +489,7 @@ La API usa RBAC. Los permisos se agregan a los roles y los roles a los usuarios.
 | Auditoría (leer) | Sí | No | No | No | Sí | No |
 | Errores (leer) | Sí | No | No | No | Sí | No |
 
-El rol `paciente` ya tiene permisos `portal:*` y `catalogo:leer`; la Fase 3 expone `GET/PUT /portal/perfil` y la Fase 4 expone el catálogo y la disponibilidad. La reserva de citas de portal se completará en la Fase 5. El rol `medico` ya no tiene permisos globales de pacientes/citas: usa `medico:agenda:leer` y `pacientes:atendidos:leer`, y sus acciones de escritura propias se completarán en la Fase 6.
+El rol `paciente` ya tiene permisos `portal:*` y `catalogo:leer`; la Fase 3 expone `GET/PUT /portal/perfil`, la Fase 4 el catálogo/disponibilidad y la Fase 5 la reserva, reprogramación y cancelación de citas propias. El rol `medico` ya no tiene permisos globales de pacientes/citas: usa `medico:agenda:leer` y `pacientes:atendidos:leer`, y sus acciones de escritura propias se completarán en la Fase 6.
 
 ### Administración de usuarios
 
@@ -616,8 +621,15 @@ El perfil se resuelve exclusivamente desde `pacientes.usuario_id`. El body no ad
 | `GET` | `/portal/especialidades` | `catalogo:leer` | Catálogo activo con `requiere_derivacion` y duración |
 | `GET` | `/portal/medicos` | `catalogo:leer` | Médicos activos que aceptan portal; filtro `especialidad_id` |
 | `GET` | `/portal/disponibilidad` | `portal:citas:leer` | Slots reservables por `medico_id`, `desde` y `hasta` |
+| `POST` | `/portal/citas` | `portal:citas:escribir` | Agenda una cita propia en una especialidad directa |
+| `GET` | `/portal/citas` | `portal:citas:leer` | Lista solo las citas propias; filtros de estado/fecha |
+| `GET` | `/portal/citas/{id}` | `portal:citas:leer` | Detalle solo si la cita es propia |
+| `PUT` | `/portal/citas/{id}` | `portal:citas:escribir` | Reprograma el slot propio; exige `version` |
+| `POST` | `/portal/citas/{id}/cancelar` | `portal:citas:escribir` | Cancela si se respeta el corte configurado |
 
 `/portal/medicos` devuelve solo datos públicos del profesional (nombres, especialidad, bio, foto y duración), nunca documento, email, teléfono ni dirección. `/portal/disponibilidad` genera slots en `CLINIC_TIMEZONE`, los entrega en UTC, resta bloqueos y citas `programada`/`confirmada`, aplica la antelación mínima y el horizonte máximo. Las fechas `desde`/`hasta` son inclusivas y el rango no puede superar el horizonte configurado.
+
+En `/portal/citas`, `paciente_id` se obtiene exclusivamente del actor. El servidor fuerza `canal=portal_paciente`, usa la duración real del slot, valida que la especialidad no requiera derivación y aplica `AUTO_CONFIRM_PORTAL_BOOKINGS`. La reprogramación conserva paciente, médico y especialidad, y la cancelación exige al menos `PORTAL_CANCEL_CUTOFF_HOURS` de antelación. Las citas `atendida`, `no_asistio`, `cancelada` o `reprogramada` no se pueden reprogramar. Al crear la cita se escribe una confirmación básica en el buzón de desarrollo; el fallo de correo no revierte la reserva y el outbox real queda para la Fase 8.
 
 ### Portal del médico
 
@@ -947,7 +959,19 @@ Las pruebas de la Fase 4 cubren:
 - validación de solapes y control de versión de horarios;
 - CRUD de horarios/bloqueos y consulta de citas activas contra PostgreSQL (`TestAgendaStoreCRUDYConsultasDeDisponibilidad`).
 
-La prueba de integración del store se ejecuta con `TEST_DATABASE_URL` apuntando a una base migrada; se omiten automáticamente si la variable no existe. También se validó el flujo HTTP completo sobre una base temporal desde cero: crear médico, crear horario, consultar disponibilidad (2 slots), crear bloqueo (1 slot), rechazar solape y versión obsoleta con `409`, actualizar con `200` y desactivar horario (0 slots).
+La Fase 5 no agrega una migración nueva: reutiliza las columnas de metadata de citas de la migración 011. La prueba de integración del store se ejecuta con `TEST_DATABASE_URL` apuntando a una base migrada; se omiten automáticamente si la variable no existe. También se validó el flujo HTTP completo sobre una base temporal desde cero: crear médico, crear horario, consultar disponibilidad (2 slots), crear bloqueo (1 slot), rechazar solape y versión obsoleta con `409`, actualizar con `200` y desactivar horario (0 slots).
+
+Las pruebas de la Fase 5 cubren:
+
+- creación forzando paciente del actor, `canal=portal_paciente`, autor y duración del slot;
+- rechazo de especialidades con derivación y médicos que no aceptan portal;
+- listado y detalle con ownership por paciente;
+- reprogramación con `version`, conservando paciente/médico;
+- cancelación antes/después del corte configurado;
+- persistencia de `canal`, `creada_por_usuario_id` y `motivo_cancelacion` en PostgreSQL;
+- carrera de dos pacientes por el mismo slot: una cita y un `409`.
+
+El E2E de Fase 5 se ejecutó sobre una base temporal desde cero con un paciente verificado: reserva `201`, cita `confirmada` con canal `portal_paciente`, listado propio, reprogramación `200`, cancelación `200` y rechazo de Cardiología con `409 requiere_derivacion`.
 
 Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos registros concurrentes del mismo documento, verificación de un solo uso, token vencido y reutilizado, reset con revocación de refresh tokens, aprobación/rechazo de vinculación y vinculación de médico. También se prueba que el login de un paciente sin email verificado no emite sesión y que una contraseña incorrecta no revela el estado de verificación.
 
@@ -977,7 +1001,7 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 | ErrorAplicacion | `errores_aplicacion` | `ErrorStore` |
 | Retención | `auditoria`, `errores_aplicacion` | `RetentionStore` |
 
-El adaptador de correo de desarrollo (`DevEmailSender`) no es una entidad de base: escribe archivos `.eml` en `EMAIL_OUTBOX_DIR` detrás del puerto `service.EmailSender`. El resto del modelo (historia clínica, hospitalización, farmacia, facturación) puede agregarse replicando el patrón: entidad en `service/entities`, puerto en `service/ports.go`, caso de uso en `service`, almacén en `repository/postgres` y handler en `transport/http`.
+`Cita` persiste además `canal`, `creada_por_usuario_id`, `derivacion_id` y `motivo_cancelacion`; el portal fuerza `canal=portal_paciente` y el actor como creador. El adaptador de correo de desarrollo (`DevEmailSender`) no es una entidad de base: escribe archivos `.eml` en `EMAIL_OUTBOX_DIR` detrás del puerto `service.EmailSender`. El resto del modelo (historia clínica, hospitalización, farmacia, facturación) puede agregarse replicando el patrón: entidad en `service/entities`, puerto en `service/ports.go`, caso de uso en `service`, almacén en `repository/postgres` y handler en `transport/http`.
 
 ## Reglas de negocio implementadas
 
@@ -993,6 +1017,9 @@ El adaptador de correo de desarrollo (`DevEmailSender`) no es una entidad de bas
 10. Los slots del portal se calculan desde horarios activos y vigentes, se convierten desde `CLINIC_TIMEZONE` a UTC y descartan bloqueos, citas activas, horarios pasados y fechas fuera de la antelación/horizonte.
 11. Una especialidad nueva exige derivación por defecto; el catálogo se actualiza con `requiere_derivacion`, `activa`, `orden` y `duracion_cita_min`.
 12. Un horario o bloqueo solo se modifica con `version` vigente y no puede solaparse con otro activo del mismo médico.
+13. El paciente solo agenda especialidades con `requiere_derivacion=false`; el servidor fuerza su `paciente_id`, el canal `portal_paciente` y la duración del slot.
+14. La reprogramación de portal exige `version`, no cambia paciente/médico y vuelve a validar el slot; la cancelación respeta `PORTAL_CANCEL_CUTOFF_HOURS`.
+15. Dos pacientes que compiten por el mismo slot obtienen una sola cita y un `409` gracias a las restricciones de exclusión de PostgreSQL.
 10. El refresh token se guarda como hash SHA-256; nunca en texto plano.
 11. La reutilización de un refresh token revocado revoca todas las sesiones del usuario.
 12. Cada access token incluye la versión de sesión (`ver`); si no coincide con `usuarios.token_version`, se rechaza aunque la firma sea válida.

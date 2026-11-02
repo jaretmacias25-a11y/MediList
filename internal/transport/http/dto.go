@@ -313,6 +313,9 @@ type citaResponse struct {
 	Tipo               string    `json:"tipo"`
 	Motivo             string    `json:"motivo"`
 	Estado             string    `json:"estado"`
+	Canal              string    `json:"canal"`
+	DerivacionID       *int64    `json:"derivacion_id,omitempty"`
+	MotivoCancelacion  string    `json:"motivo_cancelacion,omitempty"`
 	Version            int64     `json:"version"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
@@ -332,6 +335,9 @@ func nuevaCitaResponse(c entities.Cita) citaResponse {
 		Tipo:               string(c.Tipo),
 		Motivo:             c.Motivo,
 		Estado:             string(c.Estado),
+		Canal:              string(c.Canal),
+		DerivacionID:       c.DerivacionID,
+		MotivoCancelacion:  c.MotivoCancelacion,
 		Version:            c.Version,
 		CreatedAt:          c.CreatedAt,
 		UpdatedAt:          c.UpdatedAt,

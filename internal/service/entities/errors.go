@@ -10,6 +10,8 @@ var (
 	ErrNotFound = errors.New("recurso no encontrado")
 	// ErrConflict indica una violación de unicidad o una regla de negocio.
 	ErrConflict = errors.New("conflicto con datos existentes")
+	// ErrRequiereDerivacion indica que la especialidad no es de acceso directo.
+	ErrRequiereDerivacion = errors.New("la especialidad requiere derivación")
 	// ErrValidation indica que los datos recibidos no son válidos.
 	ErrValidation = errors.New("datos inválidos")
 	// ErrUnauthorized indica credenciales inválidas o sesión no válida.

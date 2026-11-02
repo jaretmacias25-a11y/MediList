@@ -149,6 +149,17 @@ func (f *fakeEmailSenderCuenta) EnviarResetPassword(
 	return nil
 }
 
+func (f *fakeEmailSenderCuenta) EnviarCitaCreada(
+	_ context.Context,
+	destino, nombre string,
+	cita *entities.Cita,
+) error {
+	f.enviados = append(f.enviados, correoCuentaPrueba{
+		destino: destino, nombre: nombre, tipo: "cita",
+	})
+	return nil
+}
+
 func configCuentaPrueba() CuentaConfig {
 	return CuentaConfig{
 		TermsVersion:    "2026-10",

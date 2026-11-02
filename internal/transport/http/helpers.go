@@ -32,6 +32,25 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	return nil
 }
 
+// decodeOptionalJSON acepta un cuerpo ausente o vacío y, si existe, exige un
+// único objeto JSON sin campos desconocidos.
+func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(dst); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return entities.NewValidationError("JSON inválido: %v", err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return entities.NewValidationError("el cuerpo debe contener un único objeto JSON")
+	}
+	return nil
+}
+
 func pathID(r *http.Request) (int64, error) {
 	return pathInt(r, "id")
 }

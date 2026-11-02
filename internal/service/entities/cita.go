@@ -22,6 +22,28 @@ func (t TipoCita) Valido() bool {
 	}
 }
 
+// CanalCita identifica desde dónde se originó la cita.
+type CanalCita string
+
+const (
+	CanalCitaRecepcion      CanalCita = "recepcion"
+	CanalCitaPortalPaciente CanalCita = "portal_paciente"
+	CanalCitaMedico         CanalCita = "medico"
+	CanalCitaAdmin          CanalCita = "admin"
+	CanalCitaLegacy         CanalCita = "legacy"
+)
+
+// Valido indica si el canal existe.
+func (c CanalCita) Valido() bool {
+	switch c {
+	case CanalCitaRecepcion, CanalCitaPortalPaciente, CanalCitaMedico,
+		CanalCitaAdmin, CanalCitaLegacy:
+		return true
+	default:
+		return false
+	}
+}
+
 // EstadoCita representa el ciclo de vida de una cita.
 type EstadoCita string
 
@@ -88,6 +110,10 @@ type Cita struct {
 	Tipo               TipoCita
 	Motivo             string
 	Estado             EstadoCita
+	Canal              CanalCita
+	CreadaPorUsuarioID *int64
+	DerivacionID       *int64
+	MotivoCancelacion  string
 	Version            int64
 	CreatedAt          time.Time
 	UpdatedAt          time.Time

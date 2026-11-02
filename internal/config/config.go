@@ -53,9 +53,11 @@ type Config struct {
 	TermsVersion         string
 	MinEdadCuenta        int
 
-	ClinicTimezone       string
-	PortalMinNoticeHours int
-	PortalMaxAdvanceDays int
+	ClinicTimezone            string
+	PortalMinNoticeHours      int
+	PortalMaxAdvanceDays      int
+	PortalCancelCutoffHours   int
+	AutoConfirmPortalBookings bool
 }
 
 // Load lee .env (sin sobrescribir variables del sistema) y las variables de entorno.
@@ -99,9 +101,11 @@ func Load() Config {
 		TermsVersion:         strings.TrimSpace(getenv("TERMS_VERSION", "2026-10")),
 		MinEdadCuenta:        getenvInt("MIN_EDAD_CUENTA", 18),
 
-		ClinicTimezone:       strings.TrimSpace(getenv("CLINIC_TIMEZONE", "America/Guayaquil")),
-		PortalMinNoticeHours: getenvInt("PORTAL_MIN_NOTICE_HOURS", 2),
-		PortalMaxAdvanceDays: getenvInt("PORTAL_MAX_ADVANCE_DAYS", 90),
+		ClinicTimezone:            strings.TrimSpace(getenv("CLINIC_TIMEZONE", "America/Guayaquil")),
+		PortalMinNoticeHours:      getenvInt("PORTAL_MIN_NOTICE_HOURS", 2),
+		PortalMaxAdvanceDays:      getenvInt("PORTAL_MAX_ADVANCE_DAYS", 90),
+		PortalCancelCutoffHours:   getenvInt("PORTAL_CANCEL_CUTOFF_HOURS", 24),
+		AutoConfirmPortalBookings: getenvBool("AUTO_CONFIRM_PORTAL_BOOKINGS", true),
 	}
 }
 
@@ -224,6 +228,9 @@ func (c Config) Validate() error {
 	if c.PortalMaxAdvanceDays < 1 || c.PortalMaxAdvanceDays > 365 {
 		return fmt.Errorf("PORTAL_MAX_ADVANCE_DAYS debe estar entre 1 y 365")
 	}
+	if c.PortalCancelCutoffHours < 0 || c.PortalCancelCutoffHours > 720 {
+		return fmt.Errorf("PORTAL_CANCEL_CUTOFF_HOURS debe estar entre 0 y 720")
+	}
 	return nil
 }
 
@@ -260,6 +267,18 @@ func getenvInt(key string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getenvBool(key string, fallback bool) bool {
+	value, ok := os.LookupEnv(key)
+	if !ok || value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
 	if err != nil {
 		return fallback
 	}

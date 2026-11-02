@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"strings"
+	"time"
+
 	"medilist/internal/service"
 	"medilist/internal/service/entities"
 )
@@ -21,6 +24,62 @@ func (r actualizarPerfilRequest) toService() service.DatosContactoPaciente {
 		ContactoEmergenciaTelefono: r.ContactoEmergenciaTelefono,
 		Version:                    r.Version,
 	}
+}
+
+type portalCitaRequest struct {
+	MedicoID        int64  `json:"medico_id"`
+	FechaHoraInicio string `json:"fecha_hora_inicio"`
+	Tipo            string `json:"tipo"`
+	Motivo          string `json:"motivo"`
+}
+
+func (r portalCitaRequest) toService() (service.PortalCitaInput, error) {
+	fecha, err := fechaHoraRFC3339(r.FechaHoraInicio)
+	if err != nil {
+		return service.PortalCitaInput{}, err
+	}
+	return service.PortalCitaInput{
+		MedicoID:        r.MedicoID,
+		FechaHoraInicio: fecha,
+		Tipo:            entities.TipoCita(strings.TrimSpace(r.Tipo)),
+		Motivo:          r.Motivo,
+	}, nil
+}
+
+type portalCitaReprogramarRequest struct {
+	FechaHoraInicio string  `json:"fecha_hora_inicio"`
+	Motivo          *string `json:"motivo"`
+	Version         *int64  `json:"version"`
+}
+
+func (r portalCitaReprogramarRequest) toService() (service.PortalCitaReprogramarInput, error) {
+	fecha, err := fechaHoraRFC3339(r.FechaHoraInicio)
+	if err != nil {
+		return service.PortalCitaReprogramarInput{}, err
+	}
+	return service.PortalCitaReprogramarInput{
+		FechaHoraInicio: fecha,
+		Motivo:          r.Motivo,
+		Version:         r.Version,
+	}, nil
+}
+
+type cancelarCitaRequest struct {
+	Motivo string `json:"motivo"`
+}
+
+func fechaHoraRFC3339(texto string) (time.Time, error) {
+	texto = strings.TrimSpace(texto)
+	if texto == "" {
+		return time.Time{}, entities.NewValidationError(
+			"fecha_hora_inicio es obligatoria (formato RFC3339)")
+	}
+	fecha, err := time.Parse(time.RFC3339, texto)
+	if err != nil {
+		return time.Time{}, entities.NewValidationError(
+			"fecha_hora_inicio debe tener formato RFC3339, por ejemplo 2026-11-05T09:00:00-05:00")
+	}
+	return fecha, nil
 }
 
 type cuentaPerfilResponse struct {

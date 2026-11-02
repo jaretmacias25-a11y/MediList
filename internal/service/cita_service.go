@@ -69,6 +69,7 @@ func (s *CitaService) validarSolape(ctx context.Context, c entities.Cita) error 
 func (s *CitaService) Crear(ctx context.Context, c entities.Cita) (*entities.Cita, error) {
 	normalizarCita(&c)
 	c.Estado = entities.EstadoCitaProgramada
+	c.Canal = entities.CanalCitaRecepcion
 
 	if err := validarDatosCita(c); err != nil {
 		return nil, err

@@ -67,6 +67,8 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 		writeError(w, http.StatusBadRequest, "validation_error", err.Error())
 	case errors.Is(err, entities.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, entities.ErrRequiereDerivacion):
+		writeError(w, http.StatusConflict, "requiere_derivacion", err.Error())
 	case errors.Is(err, entities.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, entities.ErrUnauthorized):

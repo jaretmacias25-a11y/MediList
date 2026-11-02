@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"medilist/internal/service/entities"
@@ -30,6 +31,7 @@ const citaSelect = `
 		me.nombres || ' ' || me.apellidos AS medico_nombre,
 		e.nombre AS especialidad_nombre,
 		c.fecha_hora_inicio, c.duracion_min, c.tipo, c.motivo, c.estado,
+		c.canal, c.creada_por_usuario_id, c.derivacion_id, c.motivo_cancelacion,
 		c.version, c.created_at, c.updated_at
 	FROM citas c
 	JOIN pacientes p ON p.id = c.paciente_id
@@ -53,14 +55,27 @@ func (s *CitaStore) Crear(ctx context.Context, c *entities.Cita) error {
 		return err
 	}
 
+	canal := string(c.Canal)
+	if canal == "" {
+		canal = string(entities.CanalCitaRecepcion)
+	}
+	var creadaPor, derivacion any
+	if c.CreadaPorUsuarioID != nil {
+		creadaPor = *c.CreadaPorUsuarioID
+	}
+	if c.DerivacionID != nil {
+		derivacion = *c.DerivacionID
+	}
 	const q = `
 		INSERT INTO citas
-			(paciente_id, medico_id, fecha_hora_inicio, duracion_min, tipo, motivo, estado)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+			(paciente_id, medico_id, fecha_hora_inicio, duracion_min, tipo, motivo, estado,
+			 canal, creada_por_usuario_id, derivacion_id, motivo_cancelacion)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, codigo, version, created_at, updated_at`
 	err = tx.QueryRow(ctx, q,
 		c.PacienteID, c.MedicoID, c.FechaHoraInicio, c.DuracionMin,
-		string(c.Tipo), c.Motivo, string(c.Estado),
+		string(c.Tipo), c.Motivo, string(c.Estado), canal, creadaPor, derivacion,
+		c.MotivoCancelacion,
 	).Scan(&c.ID, &c.Codigo, &c.Version, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return mapError(err)
@@ -122,6 +137,25 @@ func (s *CitaStore) Listar(ctx context.Context, filtro entities.CitaFiltro) ([]e
 		lista = append(lista, *c)
 	}
 	return lista, mapError(rows.Err())
+}
+
+// Cancelar cambia el estado y registra el motivo dentro de la misma escritura
+// optimista. Solo compite con citas activas.
+func (s *CitaStore) Cancelar(ctx context.Context, c *entities.Cita) error {
+	const q = `
+		UPDATE citas
+		SET estado = 'cancelada',
+			motivo_cancelacion = $2,
+			version = version + 1
+		WHERE id = $1 AND version = $3
+		  AND estado IN ('programada', 'confirmada')
+		RETURNING version, updated_at`
+	err := s.db.QueryRow(ctx, q, c.ID, c.MotivoCancelacion, c.Version).
+		Scan(&c.Version, &c.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conflictoConcurrencia("cita", c.ID)
+	}
+	return mapError(err)
 }
 
 func (s *CitaStore) Actualizar(ctx context.Context, c *entities.Cita) error {
@@ -219,11 +253,13 @@ func validarParticipantesActivos(ctx context.Context, tx pgx.Tx, pacienteID, med
 
 func scanCita(row rowScanner) (*entities.Cita, error) {
 	var c entities.Cita
-	var tipo, estado string
+	var tipo, estado, canal string
+	var creadaPor, derivacion pgtype.Int8
 	err := row.Scan(
 		&c.ID, &c.Codigo, &c.PacienteID, &c.PacienteNombre,
 		&c.MedicoID, &c.MedicoNombre, &c.EspecialidadNombre,
 		&c.FechaHoraInicio, &c.DuracionMin, &tipo, &c.Motivo, &estado,
+		&canal, &creadaPor, &derivacion, &c.MotivoCancelacion,
 		&c.Version, &c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
@@ -231,5 +267,14 @@ func scanCita(row rowScanner) (*entities.Cita, error) {
 	}
 	c.Tipo = entities.TipoCita(tipo)
 	c.Estado = entities.EstadoCita(estado)
+	c.Canal = entities.CanalCita(canal)
+	if creadaPor.Valid {
+		id := creadaPor.Int64
+		c.CreadaPorUsuarioID = &id
+	}
+	if derivacion.Valid {
+		id := derivacion.Int64
+		c.DerivacionID = &id
+	}
 	return &c, nil
 }

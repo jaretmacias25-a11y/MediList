@@ -126,6 +126,14 @@ func main() {
 		},
 	)
 	catalogoService := service.NewCatalogoService(catalogoStore)
+	portalCitaService := service.NewPortalCitaService(
+		citaStore, pacienteStore, medicoStore, disponibilidadService,
+		service.PortalCitaConfig{
+			CancelCutoff: time.Duration(cfg.PortalCancelCutoffHours) * time.Hour,
+			AutoConfirm:  cfg.AutoConfirmPortalBookings,
+		},
+		emailSender,
+	)
 
 	authService := service.NewAuthService(service.AuthConfig{
 		JWTSecret:        cfg.JWTSecret,
@@ -174,6 +182,7 @@ func main() {
 		Agenda:         agendaService,
 		Catalogo:       catalogoService,
 		Disponibilidad: disponibilidadService,
+		PortalCitas:    portalCitaService,
 		Auditoria:      auditoriaService,
 		AuditoriaStore: auditoriaStore,
 		ActorStore:     actorStore,

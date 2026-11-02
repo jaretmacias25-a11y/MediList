@@ -118,6 +118,8 @@ La entidad conceptual **Derivacion** se implementa como `derivaciones`, con la c
 
 **Fase 4 implementada:** `HorarioProfesional` y `BloqueoAgenda` tienen entidad, store, CRUD administrativo y reglas de solape/versión. `SlotDisponible` y `Disponibilidad` son objetos calculados por `DisponibilidadService`; no se persisten. El servicio convierte las horas locales de `CLINIC_TIMEZONE` a UTC, resta bloqueos y citas `programada`/`confirmada`, y aplica antelación mínima y horizonte máximo.
 
+**Fase 5 implementada:** `Cita` persiste `canal`, `creada_por_usuario_id`, `derivacion_id` y `motivo_cancelacion`. El portal del paciente usa `PortalCitaService`, fuerza `paciente_id` desde el actor y `canal=portal_paciente`, y solo permite especialidades con `requiere_derivacion=false`. La reprogramación usa `version` y conserva paciente/médico; la cancelación respeta `PORTAL_CANCEL_CUTOFF_HOURS`.
+
 Planificado para la Fase 6: `pacientes.medico_responsable_id` (asignación actual) y `transferencias_paciente` (historial). La transferencia es interna, exige `pacientes:transferir`, motivo y auditoría; el médico nuevo obtiene acceso por la asignación y el anterior conserva solo sus citas vigentes o atendidas.
 
 ---

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"medilist/internal/service/entities"
 )
 
 // DevEmailSender escribe los correos en un buzón local. Es un adaptador de
@@ -71,6 +73,31 @@ func (s *DevEmailSender) EnviarResetPassword(
 		nombre, enlace, expira.Format(time.RFC3339),
 	)
 	return s.escribir(ctx, "reset_password", destino, asunto, cuerpo)
+}
+
+// EnviarCitaCreada escribe la confirmación básica de una cita del portal. La
+// Fase 8 la sustituirá por una notificación transaccional en outbox.
+func (s *DevEmailSender) EnviarCitaCreada(
+	ctx context.Context,
+	destino, nombre string,
+	cita *entities.Cita,
+) error {
+	if cita == nil {
+		return fmt.Errorf("cita vacía para notificación")
+	}
+	asunto := "Tu cita en MediList"
+	cuerpo := fmt.Sprintf(
+		"Hola %s:\n\n"+
+			"Tu cita %s quedó registrada para el %s.\n"+
+			"Profesional: %s\nEspecialidad: %s\n\n"+
+			"Puedes consultar o cancelar tu cita desde el portal de MediList.\n",
+		nombre,
+		cita.Codigo,
+		cita.FechaHoraInicio.Format(time.RFC3339),
+		cita.MedicoNombre,
+		cita.EspecialidadNombre,
+	)
+	return s.escribir(ctx, "cita", destino, asunto, cuerpo)
 }
 
 func (s *DevEmailSender) escribir(

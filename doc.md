@@ -2,7 +2,7 @@
 
 > Fecha: 26/10/2026  
 > Alcance: backend Go/PostgreSQL. No incluye frontend.  
-> Estado: Fase 0 cerrada; fases 1–4 completadas; la Fase 5 (agenda directa del paciente) es la siguiente.
+> Estado: Fase 0 cerrada; fases 1–5 completadas; la Fase 6 (flujo médico, derivaciones y transferencia interna) es la siguiente.
 > Documentos relacionados: `README.md` (estado actual) y `entidades.md` (modelo completo objetivo).
 
 ---
@@ -17,7 +17,7 @@ La base actual ya tiene una parte importante del backend administrativo:
 - control de concurrencia con restricciones de exclusión y versiones optimistas;
 - auditoría, logs estructurados y retención.
 
-La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. La **Fase 4 también está implementada**: catálogo administrativo completo, CRUD de horarios/bloqueos, perfil público del médico, cálculo de disponibilidad por zona horaria, antelación y horizonte, y endpoints `/portal/especialidades`, `/portal/medicos` y `/portal/disponibilidad`. Todavía **no existe la agenda directa de portal ni las acciones clínicas del médico**: eso corresponde a las fases 5–8. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
+La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. La **Fase 4 está implementada**: catálogo administrativo completo, CRUD de horarios/bloqueos, perfil público del médico, cálculo de disponibilidad por zona horaria, antelación y horizonte, y endpoints `/portal/especialidades`, `/portal/medicos` y `/portal/disponibilidad`. La **Fase 5 también está implementada**: el paciente reserva, lista, consulta, reprograma y cancela sus propias citas en las cinco especialidades de acceso directo, con canal `portal_paciente`, versionado y control de carreras. Todavía **no existen las acciones clínicas del médico ni las derivaciones**: eso corresponde a las fases 6–8. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
 
 El orden recomendado para concluir el backend es:
 
@@ -26,7 +26,7 @@ El orden recomendado para concluir el backend es:
 3. ~~Implementar registro, verificación de cuenta y vinculación paciente/usuario.~~ (completado)
 4. Implementar autorización por fila: el paciente solo ve lo suyo y el médico solo ve su agenda.
 5. ~~Crear catálogo, horarios y disponibilidad.~~ (completado)
-6. Permitir que el paciente agende las cinco áreas de acceso directo.
+6. ~~Permitir que el paciente agende las cinco áreas de acceso directo.~~ (completado)
 7. Implementar el flujo médico mínimo y las derivaciones.
 8. Permitir que el paciente use una derivación para agendar al especialista.
 9. Añadir notificaciones, pruebas, endurecimiento y despliegue controlado.
@@ -115,10 +115,10 @@ Pediatría será de **acceso directo para todos**, sin regla por edad. Se implem
 
 ### 2.2 Lo que falta para el flujo solicitado
 
-- **Portal del paciente:** perfil, catálogo y disponibilidad ya existen; faltan citas propias y derivaciones (fases 5 y 7).
+- **Portal del paciente:** perfil, catálogo, disponibilidad, reserva, listado, reprogramación y cancelación de citas propias implementados; faltan las derivaciones (fase 7).
 - **Portal del médico:** existe la agenda propia; faltan "mi cita" con acciones, "marcar atendida" y "emitir derivación" (fase 6).
-- **Disponibilidad:** tablas, CRUD administrativo, generación de slots, zona horaria y reglas de antelación/horizonte implementados; la reserva transaccional del slot se completa en la Fase 5.
-- **Especialidades solicitadas:** `FISIO`, `ODONTO`, `NUTRI` y `OTORRINO` están en el catálogo y se exponen en el portal.
+- **Disponibilidad y reserva:** tablas, CRUD administrativo, generación de slots, zona horaria, antelación/horizonte y reserva transaccional con control de carreras implementados.
+- **Especialidades solicitadas:** `FISIO`, `ODONTO`, `NUTRI` y `OTORRINO` están en el catálogo y se exponen en el portal; las cinco directas se pueden reservar desde la Fase 5.
 - **Derivaciones:** la tabla, triggers y pruebas de esquema existen; faltan servicio, endpoints, consumo y liberación desde la API.
 - **Autorización por fila:** un médico con `citas:leer` puede consultar todas las citas; el rol paciente existe, pero el patrón actual no está preparado para “solo lo mío”.
 - **Notificaciones transaccionales:** verificación y reset ya tienen correo de desarrollo; faltan recordatorios, confirmaciones y outbox durable.
@@ -942,11 +942,11 @@ Decisiones implementadas:
 | `GET` | `/portal/especialidades` | `catalogo:leer` | Catálogo visible, con `requiere_derivacion` |
 | `GET` | `/portal/medicos` | `catalogo:leer` | Médicos activos; filtro por especialidad |
 | `GET` | `/portal/disponibilidad` | `portal:citas:leer` | Slots disponibles por médico/rango |
-| `POST` | `/portal/citas` | `portal:citas:escribir` | Agenda cita propia |
-| `GET` | `/portal/citas` | `portal:citas:leer` | Lista solo citas propias |
-| `GET` | `/portal/citas/{id}` | `portal:citas:leer` | Detalle solo si es propia |
-| `PUT` | `/portal/citas/{id}` | `portal:citas:escribir` | Reprograma con `version` |
-| `POST` | `/portal/citas/{id}/cancelar` | `portal:citas:escribir` | Cancela si cumple política |
+| `POST` | `/portal/citas` | `portal:citas:escribir` | Agenda cita propia (implementado en Fase 5) |
+| `GET` | `/portal/citas` | `portal:citas:leer` | Lista solo citas propias (implementado en Fase 5) |
+| `GET` | `/portal/citas/{id}` | `portal:citas:leer` | Detalle solo si es propia (implementado en Fase 5) |
+| `PUT` | `/portal/citas/{id}` | `portal:citas:escribir` | Reprograma con `version` (implementado en Fase 5) |
+| `POST` | `/portal/citas/{id}/cancelar` | `portal:citas:escribir` | Cancela si cumple política (implementado en Fase 5) |
 | `GET` | `/portal/derivaciones` | `portal:derivaciones:leer` | Derivaciones propias |
 | `GET` | `/portal/derivaciones/{id}` | `portal:derivaciones:leer` | Detalle propio |
 
@@ -1227,21 +1227,23 @@ Tareas:
 
 ### Fase 5 — Agenda directa del paciente
 
+**Estado:** completada (Paso 9).
+
 **Objetivo:** que el paciente agende solo las cinco áreas permitidas.
 
 Tareas:
 
-- `POST /portal/citas`.
-- `GET /portal/citas`, detalle, cancelación y reprogramación.
-- Forzar `paciente_id` desde el actor.
-- Forzar `canal = portal_paciente`.
-- Validar especialidad directa; rechazar especialista sin derivación.
-- Validar médico activo, acepta portal y especialidad correcta.
-- Validar slot, antelación, máximo de días y política de cancelación.
-- Usar `version` en reprogramación.
-- Integrar con las restricciones de exclusión existentes.
-- Auditar creación, cancelación y reprogramación.
-- Notificación básica de confirmación (aunque el envío real llegue en Fase 8).
+- [x] `POST /portal/citas`.
+- [x] `GET /portal/citas`, detalle, cancelación y reprogramación.
+- [x] Forzar `paciente_id` desde el actor.
+- [x] Forzar `canal = portal_paciente`.
+- [x] Validar especialidad directa; rechazar especialista sin derivación.
+- [x] Validar médico activo, acepta portal y especialidad correcta.
+- [x] Validar slot, antelación, máximo de días y política de cancelación.
+- [x] Usar `version` en reprogramación.
+- [x] Integrar con las restricciones de exclusión existentes.
+- [x] Auditar creación, cancelación y reprogramación.
+- [x] Notificación básica de confirmación: `EmailSender.EnviarCitaCreada` escribe el correo de confirmación en el buzón de desarrollo; el outbox transaccional queda para la Fase 8.
 
 **Criterio de salida:** el paciente agenda Medicina General, Fisioterapia, Odontología, Nutrición y Pediatría; no puede agendar Cardiología u Otorrinolaringología sin derivación; no puede ver ni modificar citas ajenas; las carreras devuelven `409`.
 
@@ -2054,7 +2056,60 @@ Validación:
 - `docs/openapi.yaml` validado con Redocly sin errores de contrato (solo advertencias de estilo).
 - E2E sobre una base temporal migrada desde cero: se creó un médico y un horario, `/portal/disponibilidad` devolvió 2 slots en UTC, un bloqueo dejó 1, un solape de horario y un `version` obsoleto devolvieron `409`, la actualización correcta devolvió `200`, y al eliminar bloqueo/horario la disponibilidad volvió a 4/0 slots. La base temporal se eliminó al finalizar.
 
-**Pendiente inmediato:** Fase 5 (agenda directa del paciente y reserva transaccional del slot).
+**Pendiente inmediato:** Fase 6 (flujo médico, derivaciones y transferencia interna).
+
+### Paso 9 — Fase 5: agenda directa del paciente
+
+**Estado:** completado.
+
+**Archivos principales:**
+
+- `internal/service/portal_cita_service.go`: reserva, listado, detalle, reprogramación y cancelación con ownership por actor.
+- `internal/repository/postgres/cita_store.go`: persistencia de `canal`, `creada_por_usuario_id`, `derivacion_id`, `motivo_cancelacion` y cancelación optimista.
+- `internal/service/entities/cita.go`: campos de metadata y tipo `CanalCita`.
+- `internal/transport/http/portal_cita_handler.go`, `portal_dto.go`: endpoints y DTOs del portal.
+- `internal/config/config.go`: `PORTAL_CANCEL_CUTOFF_HOURS` y `AUTO_CONFIRM_PORTAL_BOOKINGS`.
+- `internal/notificaciones/email_dev.go`: confirmación básica de cita en el buzón local.
+- `docs/openapi.yaml`: contrato de `/portal/citas`.
+
+No requiere migración nueva: reutiliza las columnas `canal`, `creada_por_usuario_id`, `derivacion_id` y `motivo_cancelacion` de la migración 011.
+
+**Reglas implementadas:**
+
+- El `paciente_id` se obtiene exclusivamente de `Actor.PacienteVinculado()` y se verifica contra `pacientes.usuario_id`.
+- `canal` se fuerza a `portal_paciente` y `creada_por_usuario_id` se toma del actor.
+- Solo se aceptan especialidades con `requiere_derivacion=false`; las demás devuelven `409 requiere_derivacion`.
+- El médico debe estar activo, aceptar portal y tener una especialidad activa.
+- La reserva usa `DisponibilidadService.ValidarSlot`; la duración sale del slot, no del body.
+- El estado inicial es `confirmada` si `AUTO_CONFIRM_PORTAL_BOOKINGS=true`; si no, `programada`.
+- La reprogramación exige `version`, conserva paciente/médico/especialidad y vuelve a validar el slot.
+- La cancelación exige `PORTAL_CANCEL_CUTOFF_HOURS` de antelación, registra motivo y es idempotente si la cita ya está cancelada.
+- Las citas terminales (`atendida`, `no_asistio`, `cancelada`, `reprogramada`) no se reprograman.
+- Las restricciones de exclusión de PostgreSQL resuelven la carrera de dos pacientes por el mismo slot.
+- La confirmación se escribe en el buzón de desarrollo mediante `EmailSender.EnviarCitaCreada`; un fallo de correo no revierte la cita.
+
+**Pruebas añadidas:**
+
+- `TestPortalCitaCrearFuerzaPacienteCanalYDuracion`
+- `TestPortalCitaCrearEscribeConfirmacionBasica`
+- `TestPortalCitaCrearRechazaEspecialidadConDerivacion`
+- `TestPortalCitaCrearRechazaMedicoSinPortal`
+- `TestPortalCitaListarFuerzaPacienteDelActor`
+- `TestPortalCitaObtenerRechazaCitaAjena`
+- `TestPortalCitaReprogramarExigeVersionYConservaMedico`
+- `TestPortalCitaCancelarAntesDelCorte`
+- `TestPortalCitaCancelarDespuesDelCorte`
+- `TestCitaStorePersisteMetadataDePortalYCancela` (integración PostgreSQL)
+- `TestCitaStoreConcurrenteSoloPermiteUnSlot` (integración PostgreSQL)
+
+**Validación realizada:**
+
+- `gofmt -l .` sin salida.
+- `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan.
+- `docs/openapi.yaml` validado con Redocly sin errores de contrato.
+- E2E sobre base temporal desde cero: paciente verificado agenda un slot de Medicina General (`201`, `confirmada`, canal `portal_paciente`), lista su cita, la reprograma (`200`, misma paciente/médico) y la cancela (`200`, motivo registrado); Cardiología devuelve `409 requiere_derivacion`. La base temporal se eliminó al finalizar.
+
+**Pendiente inmediato:** Fase 6 (flujo médico, derivaciones y transferencia interna).
 
 
 

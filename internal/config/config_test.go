@@ -39,9 +39,11 @@ func configValidaParaPruebas() Config {
 		TermsVersion:         "2026-10",
 		MinEdadCuenta:        18,
 
-		ClinicTimezone:       "America/Guayaquil",
-		PortalMinNoticeHours: 2,
-		PortalMaxAdvanceDays: 90,
+		ClinicTimezone:            "America/Guayaquil",
+		PortalMinNoticeHours:      2,
+		PortalMaxAdvanceDays:      90,
+		PortalCancelCutoffHours:   24,
+		AutoConfirmPortalBookings: true,
 	}
 }
 
@@ -135,6 +137,12 @@ func TestValidateZonaHorariaYHorizonteDelPortal(t *testing.T) {
 	cfg.PortalMinNoticeHours = 200
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("la antelación mínima fuera de rango debe rechazarse")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.PortalCancelCutoffHours = 721
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("el corte de cancelación fuera de rango debe rechazarse")
 	}
 }
 

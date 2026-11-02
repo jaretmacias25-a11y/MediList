@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: MediList API
-  version: 0.5.0
+  version: 0.6.0
   description: |
-    Contrato de los endpoints implementados hasta la Fase 4. Los endpoints de
-    las fases 5-8 se agregan a medida que se implementan; el roadmap está en
+    Contrato de los endpoints implementados hasta la Fase 5. Los endpoints de
+    las fases 6-8 se agregan a medida que se implementan; el roadmap está en
     doc.md.
 
     Convenciones:
@@ -771,6 +771,113 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
 
+  /api/v1/portal/citas:
+    get:
+      tags: [Portal paciente]
+      summary: Lista las citas del paciente autenticado
+      description: El servidor ignora cualquier paciente_id de la query y filtra por el Actor.
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+        - {$ref: '#/components/parameters/EstadoCitaQuery'}
+        - {$ref: '#/components/parameters/DesdeCita'}
+        - {$ref: '#/components/parameters/HastaCita'}
+      responses:
+        '200':
+          description: Citas propias
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [Portal paciente]
+      summary: Agenda una cita propia
+      description: |
+        Solo acepta especialidades con requiere_derivacion=false. El paciente,
+        el canal y el estado inicial los decide el servidor.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PortalCitaRequest'}
+      responses:
+        '201':
+          description: Cita creada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: Slot no disponible o especialidad con derivación
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+
+  /api/v1/portal/citas/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Portal paciente]
+      summary: Detalle de una cita propia
+      responses:
+        '200':
+          description: Cita propia
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Portal paciente]
+      summary: Reprograma el slot de una cita propia
+      description: No permite cambiar paciente, médico ni especialidad.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PortalCitaReprogramarRequest'}
+      responses:
+        '200':
+          description: Cita reprogramada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/portal/citas/{id}/cancelar:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    post:
+      tags: [Portal paciente]
+      summary: Cancela una cita propia dentro del plazo configurado
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CancelarCitaRequest'}
+      responses:
+        '200':
+          description: Cita cancelada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /api/v1/medico/agenda:
     get:
       tags: [Portal médico]
@@ -1099,6 +1206,25 @@ components:
       required: false
       description: Fecha local inclusiva en formato YYYY-MM-DD.
       schema: {type: string, format: date}
+    EstadoCitaQuery:
+      name: estado
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [programada, confirmada, atendida, no_asistio, cancelada, reprogramada]
+    DesdeCita:
+      name: desde
+      in: query
+      required: false
+      description: Inicio del rango en RFC 3339.
+      schema: {type: string, format: date-time}
+    HastaCita:
+      name: hasta
+      in: query
+      required: false
+      description: Fin exclusivo del rango en RFC 3339.
+      schema: {type: string, format: date-time}
 
   schemas:
     JsonObject:
@@ -1396,6 +1522,37 @@ components:
           type: array
           items: {$ref: '#/components/schemas/SlotDisponible'}
 
+    PortalCitaRequest:
+      type: object
+      required: [medico_id, fecha_hora_inicio]
+      properties:
+        medico_id: {type: integer, format: int64, minimum: 1}
+        fecha_hora_inicio:
+          type: string
+          format: date-time
+          description: Debe coincidir exactamente con un slot generado por /portal/disponibilidad.
+        tipo: {type: string, enum: [primera_vez, control, telemedicina], default: primera_vez}
+        motivo: {type: string, maxLength: 1000}
+
+    PortalCitaReprogramarRequest:
+      type: object
+      required: [fecha_hora_inicio, version]
+      properties:
+        fecha_hora_inicio:
+          type: string
+          format: date-time
+          description: Nuevo slot; no se permite cambiar paciente, médico ni especialidad.
+        motivo: {type: string, maxLength: 1000}
+        version:
+          type: integer
+          format: int64
+          description: Versión leída de la cita. Puede ser 0 para citas recién creadas.
+
+    CancelarCitaRequest:
+      type: object
+      properties:
+        motivo: {type: string, maxLength: 500}
+
     CitaRequest:
       type: object
       required: [paciente_id, medico_id, fecha_hora_inicio, duracion_min]
@@ -1511,10 +1668,6 @@ components:
           schema: {$ref: '#/components/schemas/ErrorResponse'}
 
 x-pendientes:
-  - fase: 5
-    endpoints:
-      - /api/v1/portal/citas
-      - /api/v1/portal/citas/{id}
   - fase: 6
     endpoints:
       - /api/v1/medico/citas/{id}/nota

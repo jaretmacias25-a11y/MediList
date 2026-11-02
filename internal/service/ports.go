@@ -118,12 +118,25 @@ type DisponibilidadStore interface {
 	) ([]entities.IntervaloOcupado, error)
 }
 
+// SlotValidator valida que un instante corresponda a un slot reservable. La
+// implementación real es DisponibilidadService; la interfaz permite probar el
+// portal sin acoplarlo a la generación completa de slots.
+type SlotValidator interface {
+	ValidarSlot(
+		ctx context.Context,
+		medicoID int64,
+		inicio time.Time,
+		duracionMin int,
+	) (*entities.SlotDisponible, error)
+}
+
 // CitaStore es el puerto que debe implementar el repositorio.
 type CitaStore interface {
 	Crear(ctx context.Context, c *entities.Cita) error
 	ObtenerPorID(ctx context.Context, id int64) (*entities.Cita, error)
 	Listar(ctx context.Context, filtro entities.CitaFiltro) ([]entities.Cita, error)
 	Actualizar(ctx context.Context, c *entities.Cita) error
+	Cancelar(ctx context.Context, c *entities.Cita) error
 	ExisteSolape(ctx context.Context, medicoID int64, inicio time.Time, duracionMin int, excluirID int64) (bool, error)
 	ExisteSolapePaciente(ctx context.Context, pacienteID int64, inicio time.Time, duracionMin int, excluirID int64) (bool, error)
 }
@@ -223,12 +236,13 @@ type CuentaStore interface {
 	VincularMedico(ctx context.Context, medicoID, usuarioID int64, cuando time.Time) error
 }
 
-// EmailSender es el puerto de notificaciones de cuenta. El adaptador de
-// desarrollo escribe en un buzón local; un proveedor real puede implementar la
-// misma interfaz sin cambiar la lógica de registro.
+// EmailSender es el puerto de notificaciones de cuenta y citas. El adaptador
+// de desarrollo escribe en un buzón local; un proveedor real puede implementar
+// la misma interfaz sin cambiar la lógica de registro o reserva.
 type EmailSender interface {
 	EnviarVerificacion(ctx context.Context, destino, nombre, enlace string, expira time.Time) error
 	EnviarResetPassword(ctx context.Context, destino, nombre, enlace string, expira time.Time) error
+	EnviarCitaCreada(ctx context.Context, destino, nombre string, cita *entities.Cita) error
 }
 
 // ErrorStore es el puerto de registro y consulta de errores agregados.

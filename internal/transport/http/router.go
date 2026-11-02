@@ -25,6 +25,7 @@ type Dependencies struct {
 	Agenda         *service.AgendaService
 	Catalogo       *service.CatalogoService
 	Disponibilidad *service.DisponibilidadService
+	PortalCitas    *service.PortalCitaService
 	Auditoria      *service.AuditoriaService
 	AuditoriaStore service.AuditoriaStore
 	ActorStore     service.ActorStore
@@ -123,6 +124,20 @@ func NewRouter(d Dependencies) http.Handler {
 	protegido("GET /api/v1/portal/especialidades", "catalogo:leer", catalogoHandler.Especialidades)
 	protegido("GET /api/v1/portal/medicos", "catalogo:leer", catalogoHandler.Medicos)
 	protegido("GET /api/v1/portal/disponibilidad", "portal:citas:leer", catalogoHandler.Disponibilidad)
+
+	portalCitaHandler := NewPortalCitaHandler(d.PortalCitas, d.Logger)
+	mux.Handle("POST /api/v1/portal/citas", auth.Require("portal:citas:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalCitaHandler.Crear))))
+	mux.Handle("GET /api/v1/portal/citas", auth.Require("portal:citas:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_citas_propias", "citas",
+			http.HandlerFunc(portalCitaHandler.Listar))))
+	mux.Handle("GET /api/v1/portal/citas/{id}", auth.Require("portal:citas:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_cita_propia", "citas",
+			http.HandlerFunc(portalCitaHandler.Obtener))))
+	mux.Handle("PUT /api/v1/portal/citas/{id}", auth.Require("portal:citas:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalCitaHandler.Reprogramar))))
+	mux.Handle("POST /api/v1/portal/citas/{id}/cancelar", auth.Require("portal:citas:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalCitaHandler.Cancelar))))
 
 	medicoPortalHandler := NewMedicoPortalHandler(d.MedicoPortal, d.Logger)
 	mux.Handle("GET /api/v1/medico/agenda", auth.Require("medico:agenda:leer",
