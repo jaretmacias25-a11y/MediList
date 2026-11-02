@@ -12,14 +12,20 @@ import (
 
 // CitaService contiene la lógica de negocio de la agenda.
 type CitaService struct {
-	store         CitaStore
-	pacienteStore PacienteStore
-	medicoStore   MedicoStore
+	store          CitaStore
+	pacienteStore  PacienteStore
+	medicoStore    MedicoStore
+	notificaciones *NotificacionService
 }
 
 // NewCitaService construye el servicio con sus almacenes.
 func NewCitaService(store CitaStore, pacienteStore PacienteStore, medicoStore MedicoStore) *CitaService {
 	return &CitaService{store: store, pacienteStore: pacienteStore, medicoStore: medicoStore}
+}
+
+// SetNotificaciones inyecta el outbox sin cambiar el constructor de pruebas.
+func (s *CitaService) SetNotificaciones(n *NotificacionService) {
+	s.notificaciones = n
 }
 
 func (s *CitaService) validarParticipantes(ctx context.Context, pacienteID, medicoID int64) error {
@@ -82,6 +88,20 @@ func (s *CitaService) Crear(ctx context.Context, c entities.Cita) (*entities.Cit
 	}
 	if err := s.validarSolape(ctx, c); err != nil {
 		return nil, err
+	}
+	if s.notificaciones != nil {
+		paciente, err := s.pacienteStore.ObtenerPorID(ctx, c.PacienteID)
+		if err != nil {
+			return nil, err
+		}
+		medico, err := s.medicoStore.ObtenerPorID(ctx, c.MedicoID)
+		if err != nil {
+			return nil, err
+		}
+		c.PacienteNombre = paciente.Persona.NombreCompleto()
+		c.MedicoNombre = medico.Persona.NombreCompleto()
+		c.EspecialidadNombre = medico.Especialidad.Nombre
+		c.NotificacionPendiente = s.notificaciones.CitaCreada(&c, paciente)
 	}
 	if err := s.store.Crear(ctx, &c); err != nil {
 		return nil, err
@@ -170,8 +190,25 @@ func (s *CitaService) Actualizar(ctx context.Context, id int64, c entities.Cita)
 
 	c.ID = id
 	c.Codigo = actual.Codigo
+	c.PacienteNombre = actual.PacienteNombre
+	c.MedicoNombre = actual.MedicoNombre
+	c.EspecialidadNombre = actual.EspecialidadNombre
 	c.Version = actual.Version
 	c.CreatedAt = actual.CreatedAt
+	if s.notificaciones != nil {
+		paciente, err := s.pacienteStore.ObtenerPorID(ctx, c.PacienteID)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case !c.FechaHoraInicio.Equal(actual.FechaHoraInicio):
+			c.NotificacionPendiente = s.notificaciones.CitaReprogramada(&c, paciente)
+		case c.Estado == entities.EstadoCitaConfirmada && actual.Estado != c.Estado:
+			c.NotificacionPendiente = s.notificaciones.CitaConfirmada(&c, paciente)
+		case c.Estado == entities.EstadoCitaCancelada && actual.Estado != c.Estado:
+			c.NotificacionPendiente = s.notificaciones.CitaCancelada(&c, paciente)
+		}
+	}
 	if err := s.store.Actualizar(ctx, &c); err != nil {
 		return nil, err
 	}
@@ -198,6 +235,15 @@ func (s *CitaService) CambiarEstado(ctx context.Context, id int64, nuevo entitie
 			"transición de estado no permitida: %s → %s", actual.Estado, nuevo)
 	}
 	actual.Estado = nuevo
+	if s.notificaciones != nil {
+		paciente, err := s.pacienteStore.ObtenerPorID(ctx, actual.PacienteID)
+		if err != nil {
+			return nil, err
+		}
+		if nuevo == entities.EstadoCitaConfirmada {
+			actual.NotificacionPendiente = s.notificaciones.CitaConfirmada(actual, paciente)
+		}
+	}
 	if err := s.store.Actualizar(ctx, actual); err != nil {
 		return nil, err
 	}
@@ -221,6 +267,13 @@ func (s *CitaService) Eliminar(ctx context.Context, id int64) error {
 			"la cita está en estado %s y no puede cancelarse", actual.Estado)
 	}
 	actual.Estado = entities.EstadoCitaCancelada
+	if s.notificaciones != nil {
+		paciente, err := s.pacienteStore.ObtenerPorID(ctx, actual.PacienteID)
+		if err != nil {
+			return err
+		}
+		actual.NotificacionPendiente = s.notificaciones.CitaCancelada(actual, paciente)
+	}
 	if err := s.store.Actualizar(ctx, actual); err != nil {
 		// Si otra solicitud canceló la cita entre la lectura y la escritura,
 		// la operación es idempotente y puede considerarse exitosa.

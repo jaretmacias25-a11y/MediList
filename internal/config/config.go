@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -50,6 +51,10 @@ type Config struct {
 	EmailLinkBaseURL     string
 	EmailVerificationTTL time.Duration
 	PasswordResetTTL     time.Duration
+	SMTPHost             string
+	SMTPPort             int
+	SMTPUser             string
+	SMTPPassword         string
 	TermsVersion         string
 	MinEdadCuenta        int
 
@@ -59,6 +64,18 @@ type Config struct {
 	PortalCancelCutoffHours   int
 	AutoConfirmPortalBookings bool
 	ReferralValidDays         int
+
+	NotificationIntervalSeconds int
+	NotificationBatchSize       int
+	NotificationMaxAttempts     int
+	NotificationBackoffSeconds  int
+	NotificationReminderHours   []int
+
+	CORSAllowedOrigins []string
+	TrustedProxies     []string
+	HSTSEnabled        bool
+	MetricsEnabled     bool
+	RateLimitEnabled   bool
 }
 
 // Load lee .env (sin sobrescribir variables del sistema) y las variables de entorno.
@@ -99,6 +116,10 @@ func Load() Config {
 		EmailLinkBaseURL:     strings.TrimSpace(getenv("EMAIL_LINK_BASE_URL", "http://localhost:3000")),
 		EmailVerificationTTL: time.Duration(getenvInt("EMAIL_VERIFICATION_HOURS", 24)) * time.Hour,
 		PasswordResetTTL:     time.Duration(getenvInt("PASSWORD_RESET_MINUTES", 60)) * time.Minute,
+		SMTPHost:             strings.TrimSpace(getenv("SMTP_HOST", "")),
+		SMTPPort:             getenvInt("SMTP_PORT", 587),
+		SMTPUser:             strings.TrimSpace(getenv("SMTP_USER", "")),
+		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
 		TermsVersion:         strings.TrimSpace(getenv("TERMS_VERSION", "2026-10")),
 		MinEdadCuenta:        getenvInt("MIN_EDAD_CUENTA", 18),
 
@@ -108,6 +129,18 @@ func Load() Config {
 		PortalCancelCutoffHours:   getenvInt("PORTAL_CANCEL_CUTOFF_HOURS", 24),
 		AutoConfirmPortalBookings: getenvBool("AUTO_CONFIRM_PORTAL_BOOKINGS", true),
 		ReferralValidDays:         getenvInt("REFERRAL_VALID_DAYS", 90),
+
+		NotificationIntervalSeconds: getenvInt("NOTIFICATION_INTERVAL_SECONDS", 30),
+		NotificationBatchSize:       getenvInt("NOTIFICATION_BATCH_SIZE", 50),
+		NotificationMaxAttempts:     getenvInt("NOTIFICATION_MAX_ATTEMPTS", 5),
+		NotificationBackoffSeconds:  getenvInt("NOTIFICATION_BACKOFF_SECONDS", 30),
+		NotificationReminderHours:   getenvIntList("NOTIFICATION_REMINDER_HOURS", []int{24, 2}),
+
+		CORSAllowedOrigins: getenvStringList("CORS_ALLOWED_ORIGINS"),
+		TrustedProxies:     getenvStringList("TRUSTED_PROXIES"),
+		HSTSEnabled:        getenvBool("HSTS_ENABLED", env == "production"),
+		MetricsEnabled:     getenvBool("METRICS_ENABLED", true),
+		RateLimitEnabled:   getenvBool("RATE_LIMIT_ENABLED", true),
 	}
 }
 
@@ -193,8 +226,16 @@ func (c Config) Validate() error {
 	if c.LockoutDuration < time.Minute {
 		return fmt.Errorf("LOCK_MINUTES debe ser al menos 1")
 	}
-	if c.EmailProvider != "outbox" {
-		return fmt.Errorf("EMAIL_PROVIDER debe ser outbox; el proveedor real aún no está implementado")
+	if c.EmailProvider != "outbox" && c.EmailProvider != "smtp" {
+		return fmt.Errorf("EMAIL_PROVIDER debe ser outbox o smtp")
+	}
+	if c.EmailProvider == "smtp" {
+		if c.SMTPHost == "" {
+			return fmt.Errorf("SMTP_HOST es obligatorio cuando EMAIL_PROVIDER=smtp")
+		}
+		if c.SMTPPort < 1 || c.SMTPPort > 65535 {
+			return fmt.Errorf("SMTP_PORT debe estar entre 1 y 65535")
+		}
 	}
 	if c.EmailFrom == "" || len(c.EmailFrom) > 200 {
 		return fmt.Errorf("EMAIL_FROM debe tener entre 1 y 200 caracteres")
@@ -235,6 +276,47 @@ func (c Config) Validate() error {
 	}
 	if c.ReferralValidDays < 1 || c.ReferralValidDays > 365 {
 		return fmt.Errorf("REFERRAL_VALID_DAYS debe estar entre 1 y 365")
+	}
+	if c.NotificationIntervalSeconds < 1 || c.NotificationIntervalSeconds > 3600 {
+		return fmt.Errorf("NOTIFICATION_INTERVAL_SECONDS debe estar entre 1 y 3600")
+	}
+	if c.NotificationBatchSize < 1 || c.NotificationBatchSize > 500 {
+		return fmt.Errorf("NOTIFICATION_BATCH_SIZE debe estar entre 1 y 500")
+	}
+	if c.NotificationMaxAttempts < 1 || c.NotificationMaxAttempts > 20 {
+		return fmt.Errorf("NOTIFICATION_MAX_ATTEMPTS debe estar entre 1 y 20")
+	}
+	if c.NotificationBackoffSeconds < 1 || c.NotificationBackoffSeconds > 86400 {
+		return fmt.Errorf("NOTIFICATION_BACKOFF_SECONDS debe estar entre 1 y 86400")
+	}
+	for _, horas := range c.NotificationReminderHours {
+		if horas < 1 || horas > 720 {
+			return fmt.Errorf("NOTIFICATION_REMINDER_HOURS debe contener horas entre 1 y 720")
+		}
+	}
+	for _, origen := range c.CORSAllowedOrigins {
+		if origen == "*" {
+			if c.Env == "production" {
+				return fmt.Errorf("CORS_ALLOWED_ORIGINS no puede usar '*' en producción")
+			}
+			continue
+		}
+		u, err := url.Parse(origen)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") ||
+			u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("CORS_ALLOWED_ORIGINS contiene un origen inválido: %s", origen)
+		}
+	}
+	for _, proxy := range c.TrustedProxies {
+		if strings.Contains(proxy, "/") {
+			if _, _, err := net.ParseCIDR(proxy); err != nil {
+				return fmt.Errorf("TRUSTED_PROXIES contiene un CIDR inválido: %s", proxy)
+			}
+			continue
+		}
+		if net.ParseIP(proxy) == nil {
+			return fmt.Errorf("TRUSTED_PROXIES contiene una IP inválida: %s", proxy)
+		}
 	}
 	return nil
 }
@@ -288,6 +370,39 @@ func getenvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return parsed
+}
+
+func getenvStringList(key string) []string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+	partes := strings.Split(value, ",")
+	lista := make([]string, 0, len(partes))
+	for _, parte := range partes {
+		parte = strings.TrimSpace(parte)
+		if parte != "" {
+			lista = append(lista, parte)
+		}
+	}
+	return lista
+}
+
+func getenvIntList(key string, fallback []int) []int {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	partes := strings.Split(value, ",")
+	lista := make([]int, 0, len(partes))
+	for _, parte := range partes {
+		numero, err := strconv.Atoi(strings.TrimSpace(parte))
+		if err != nil {
+			return fallback
+		}
+		lista = append(lista, numero)
+	}
+	return lista
 }
 
 // loadDotEnv implementa un lector mínimo de archivos .env.

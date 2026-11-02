@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"medilist/internal/observability"
 	"medilist/internal/service/entities"
 )
 
@@ -42,6 +43,8 @@ type MedicoClinicoService struct {
 	derivaciones      DerivacionStore
 	medicos           MedicoStore
 	especialidades    EspecialidadStore
+	pacientes         PacienteStore
+	notificaciones    *NotificacionService
 	referralValidDays int
 	now               func() time.Time
 }
@@ -74,6 +77,16 @@ func NewMedicoClinicoService(
 	}
 }
 
+// SetNotificaciones inyecta el outbox y el acceso a pacientes para las
+// notificaciones clínicas.
+func (s *MedicoClinicoService) SetNotificaciones(
+	n *NotificacionService,
+	pacientes PacienteStore,
+) {
+	s.notificaciones = n
+	s.pacientes = pacientes
+}
+
 // CambiarEstado aplica las transiciones clínicas permitidas al médico de la
 // cita. No permite cancelar ni reprogramar desde este flujo.
 func (s *MedicoClinicoService) CambiarEstado(
@@ -98,6 +111,13 @@ func (s *MedicoClinicoService) CambiarEstado(
 			cita.Estado, nuevo)
 	}
 	cita.Estado = nuevo
+	if s.notificaciones != nil && nuevo == entities.EstadoCitaConfirmada {
+		paciente, err := s.pacientes.ObtenerPorID(ctx, cita.PacienteID)
+		if err != nil {
+			return nil, err
+		}
+		cita.NotificacionPendiente = s.notificaciones.CitaConfirmada(cita, paciente)
+	}
 	var errActualizar error
 	if cita.DerivacionID != nil &&
 		(nuevo == entities.EstadoCitaAtendida || nuevo == entities.EstadoCitaNoAsistio) {
@@ -274,9 +294,12 @@ func (s *MedicoClinicoService) CrearDerivacion(
 	ahora := s.now()
 	derivacion := &entities.Derivacion{
 		PacienteID:            cita.PacienteID,
+		PacienteNombre:        cita.PacienteNombre,
 		MedicoOrigenID:        medicoID,
+		MedicoOrigenNombre:    cita.MedicoNombre,
 		CitaOrigenID:          citaID,
 		EspecialidadDestinoID: destino.ID,
+		EspecialidadDestino:   destino.Nombre,
 		MedicoDestinoID:       in.MedicoDestinoID,
 		Motivo:                motivo,
 		Prioridad:             prioridad,
@@ -284,9 +307,17 @@ func (s *MedicoClinicoService) CrearDerivacion(
 		VigenteDesde:          ahora,
 		VigenteHasta:          ahora.AddDate(0, 0, s.referralValidDays),
 	}
+	if s.notificaciones != nil && s.pacientes != nil {
+		paciente, err := s.pacientes.ObtenerPorID(ctx, cita.PacienteID)
+		if err != nil {
+			return nil, err
+		}
+		derivacion.NotificacionPendiente = s.notificaciones.DerivacionEmitida(derivacion, paciente)
+	}
 	if err := s.derivaciones.Crear(ctx, derivacion); err != nil {
 		return nil, err
 	}
+	observability.IncDerivacion()
 	return s.derivaciones.ObtenerPorID(ctx, derivacion.ID)
 }
 

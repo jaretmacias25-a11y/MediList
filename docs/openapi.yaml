@@ -1,11 +1,10 @@
 openapi: 3.1.0
 info:
   title: MediList API
-  version: 0.8.0
+  version: 0.10.0
   description: |
-    Contrato de los endpoints implementados hasta la Fase 7. Los endpoints de
-    la Fase 8 se agregan a medida que se implementan; el roadmap está en
-    doc.md.
+    Contrato de los endpoints implementados hasta la Fase 9. El roadmap de
+    endurecimiento y despliegue está en doc.md y docs/runbook.md.
 
     Convenciones:
     - Respuestas exitosas: {"data": ...} o {"data": [...], "meta": {...}}.
@@ -57,6 +56,21 @@ paths:
                 properties:
                   status: {type: string, example: degraded}
                   database: {type: string, example: down}
+
+  /metrics:
+    get:
+      tags: [Salud]
+      summary: Métricas Prometheus de operación
+      description: |
+        Contadores sin etiquetas de usuario. En producción debe exponerse solo
+        a la red del recolector de métricas.
+      security: []
+      responses:
+        '200':
+          description: Texto en formato Prometheus
+          content:
+            text/plain:
+              schema: {type: string}
 
   /api/v1/auth/login:
     post:
@@ -779,6 +793,34 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /api/v1/portal/preferencias-notificacion:
+    get:
+      tags: [Portal paciente]
+      summary: Obtiene las preferencias de notificación de la cuenta
+      responses:
+        '200':
+          description: Preferencias actuales
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    put:
+      tags: [Portal paciente]
+      summary: Actualiza las preferencias de correo y recordatorios
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PreferenciasNotificacionRequest'}
+      responses:
+        '200':
+          description: Preferencias actualizadas
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
   /api/v1/portal/especialidades:
     get:
       tags: [Portal paciente]
@@ -883,6 +925,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
 
   /api/v1/portal/citas/{id}:
     parameters:
@@ -1831,6 +1874,13 @@ components:
         creada_por_usuario_id: {type: integer, format: int64}
         created_at: {type: string, format: date-time}
 
+    PreferenciasNotificacionRequest:
+      type: object
+      required: [email_habilitado, recordatorios_habilitados]
+      properties:
+        email_habilitado: {type: boolean}
+        recordatorios_habilitados: {type: boolean}
+
     CitaRequest:
       type: object
       required: [paciente_id, medico_id, fecha_hora_inicio, duracion_min]
@@ -1941,11 +1991,12 @@ components:
           schema: {$ref: '#/components/schemas/ErrorResponse'}
     TooManyRequests:
       description: Límite de solicitudes excedido
+      headers:
+        Retry-After:
+          description: Segundos recomendados antes de reintentar.
+          schema: {type: integer, minimum: 1}
       content:
         application/json:
           schema: {$ref: '#/components/schemas/ErrorResponse'}
 
-x-pendientes:
-  - fase: 8
-    endpoints:
-      - /api/v1/notificaciones
+x-pendientes: []

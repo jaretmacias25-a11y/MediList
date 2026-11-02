@@ -117,6 +117,11 @@ type Cita struct {
 	Version            int64
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+
+	// NotificacionPendiente es transitoria: el store la inserta en el mismo
+	// outbox/transacción que la cita y no se persiste en la tabla citas.
+	NotificacionPendiente       *Notificacion
+	NotificacionMedicoPendiente *Notificacion
 }
 
 // CitaFiltro agrupa los filtros de listado de citas.

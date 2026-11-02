@@ -125,6 +125,8 @@ La entidad conceptual **Derivacion** se implementa como `derivaciones`, con la c
 
 **Fase 7 implementada:** la derivación pasa a `agendada` al reservar el especialista, vuelve a `pendiente` si se cancela con antelación, se consume como `cancelada` por cancelación tardía o no-show y se marca `atendida` al atender la cita. `ExcepcionDerivacion` registra una autorización administrativa excepcional sin crear una derivación clínica falsa. La reserva usa bloqueo `FOR UPDATE` y el índice parcial de una cita activa por derivación.
 
+**Fase 8 implementada:** `Notificacion` es una fila del outbox durable; se escribe en la misma transacción que la cita/derivación y un worker la envía con reintentos y backoff. `PreferenciasNotificacion` controla correo y recordatorios. La `dedupe_key` única evita duplicados; los cuerpos no incluyen datos clínicos sensibles ni tokens.
+
 Planificado para la Fase 6: `pacientes.medico_responsable_id` (asignación actual) y `transferencias_paciente` (historial). La transferencia es interna, exige `pacientes:transferir`, motivo y auditoría; el médico nuevo obtiene acceso por la asignación y el anterior conserva solo sus citas vigentes o atendidas.
 
 ---

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,6 +49,10 @@ func (s *CitaStore) Crear(ctx context.Context, c *entities.Cita) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := crearCitaTx(ctx, tx, c); err != nil {
+		return err
+	}
+	prepararDedupeCita(c)
+	if err := insertarNotificacionTx(ctx, tx, c.NotificacionPendiente); err != nil {
 		return err
 	}
 	return mapError(tx.Commit(ctx))
@@ -128,7 +133,31 @@ func (s *CitaStore) CrearConDerivacion(
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: la derivación fue consumida por otra operación", entities.ErrConflict)
 	}
+	prepararDedupeCita(c)
+	if err := insertarNotificacionTx(ctx, tx, c.NotificacionPendiente); err != nil {
+		return err
+	}
+	if err := insertarNotificacionTx(ctx, tx, c.NotificacionMedicoPendiente); err != nil {
+		return err
+	}
 	return mapError(tx.Commit(ctx))
+}
+
+func prepararDedupeCita(c *entities.Cita) {
+	if c == nil || c.NotificacionPendiente == nil || c.ID <= 0 {
+		return
+	}
+	if c.NotificacionPendiente.Tipo == entities.NotificacionCitaCreada &&
+		(c.NotificacionPendiente.DedupeKey == "" ||
+			strings.HasSuffix(c.NotificacionPendiente.DedupeKey, ":0")) {
+		c.NotificacionPendiente.DedupeKey = fmt.Sprintf("cita_creada:%d", c.ID)
+	}
+	if c.NotificacionMedicoPendiente != nil &&
+		c.NotificacionMedicoPendiente.Tipo == entities.NotificacionDerivacionReservada &&
+		(c.NotificacionMedicoPendiente.DedupeKey == "" ||
+			strings.HasSuffix(c.NotificacionMedicoPendiente.DedupeKey, ":0")) {
+		c.NotificacionMedicoPendiente.DedupeKey = fmt.Sprintf("derivacion_reservada:%d", c.ID)
+	}
 }
 
 func crearCitaTx(ctx context.Context, tx pgx.Tx, c *entities.Cita) error {
@@ -224,6 +253,12 @@ func (s *CitaStore) Listar(ctx context.Context, filtro entities.CitaFiltro) ([]e
 // Cancelar cambia el estado y registra el motivo dentro de la misma escritura
 // optimista. Solo compite con citas activas.
 func (s *CitaStore) Cancelar(ctx context.Context, c *entities.Cita) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return mapError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	const q = `
 		UPDATE citas
 		SET estado = 'cancelada',
@@ -232,12 +267,18 @@ func (s *CitaStore) Cancelar(ctx context.Context, c *entities.Cita) error {
 		WHERE id = $1 AND version = $3
 		  AND estado IN ('programada', 'confirmada')
 		RETURNING version, updated_at`
-	err := s.db.QueryRow(ctx, q, c.ID, c.MotivoCancelacion, c.Version).
+	err = tx.QueryRow(ctx, q, c.ID, c.MotivoCancelacion, c.Version).
 		Scan(&c.Version, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return conflictoConcurrencia("cita", c.ID)
 	}
-	return mapError(err)
+	if err != nil {
+		return mapError(err)
+	}
+	if err := insertarNotificacionTx(ctx, tx, c.NotificacionPendiente); err != nil {
+		return err
+	}
+	return mapError(tx.Commit(ctx))
 }
 
 // CancelarConDerivacion cancela la cita y libera o consume la derivación en
@@ -308,6 +349,9 @@ func (s *CitaStore) CancelarConDerivacion(
 			return mapError(err)
 		}
 	}
+	if err := insertarNotificacionTx(ctx, tx, c.NotificacionPendiente); err != nil {
+		return err
+	}
 	return mapError(tx.Commit(ctx))
 }
 
@@ -355,10 +399,19 @@ func (s *CitaStore) CambiarEstadoConDerivacion(
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: la derivación ya no está disponible", entities.ErrConflict)
 	}
+	if err := insertarNotificacionTx(ctx, tx, c.NotificacionPendiente); err != nil {
+		return err
+	}
 	return mapError(tx.Commit(ctx))
 }
 
 func (s *CitaStore) Actualizar(ctx context.Context, c *entities.Cita) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return mapError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	const q = `
 		UPDATE citas
 		SET paciente_id = $2,
@@ -371,14 +424,20 @@ func (s *CitaStore) Actualizar(ctx context.Context, c *entities.Cita) error {
 			version = version + 1
 		WHERE id = $1 AND version = $9
 		RETURNING version, updated_at`
-	err := s.db.QueryRow(ctx, q,
+	err = tx.QueryRow(ctx, q,
 		c.ID, c.PacienteID, c.MedicoID, c.FechaHoraInicio, c.DuracionMin,
 		string(c.Tipo), c.Motivo, string(c.Estado), c.Version,
 	).Scan(&c.Version, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return conflictoConcurrencia("cita", c.ID)
 	}
-	return mapError(err)
+	if err != nil {
+		return mapError(err)
+	}
+	if err := insertarNotificacionTx(ctx, tx, c.NotificacionPendiente); err != nil {
+		return err
+	}
+	return mapError(tx.Commit(ctx))
 }
 
 // ExisteSolape detecta citas activas del mismo médico que se cruzan en el tiempo.

@@ -2,7 +2,7 @@
 
 Backend en **Go** para la gestión de pacientes, médicos, especialidades y citas de una clínica. Implementa una **arquitectura limpia por capas** con persistencia en **PostgreSQL**, autenticación **JWT**, control de acceso basado en roles (**RBAC**), cuentas de paciente con verificación de email, vinculación con historias existentes y auditoría de seguridad.
 
-El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente, la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, la Fase 5 de agenda directa, la Fase 6 de flujo médico/derivaciones/transferencia interna y la Fase 7 de reserva de especialista con derivación: consumo transaccional, liberación/consumo por cancelación, no-show, reprogramación y excepción administrativa auditada.
+El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente, la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, la Fase 5 de agenda directa, la Fase 6 de flujo médico/derivaciones/transferencia interna, la Fase 7 de reserva de especialista con derivación, la Fase 8 de notificaciones (outbox transaccional, worker con reintentos/backoff, plantillas, recordatorios, preferencias y proveedor SMTP) y la Fase 9 de endurecimiento (rate limiting distribuido, CORS, HSTS, métricas y runbook). El procedimiento operativo está en [docs/runbook.md](./docs/runbook.md).
 
 ---
 
@@ -57,6 +57,7 @@ MediList/
 │   │   ├── medico_clinico_service.go   # estados, nota y derivaciones del médico
 │   │   ├── paciente_transfer_service.go # transferencia interna del médico tratante
 │   │   ├── derivacion_admin_service.go  # excepción administrativa de derivación
+│   │   ├── notificacion_service.go      # outbox, plantillas y recordatorios
 │   │   ├── cuenta_service.go           # registro, verificación, reset y vinculación
 │   │   ├── error_service.go            # errores agregados (stdout + PostgreSQL)
 │   │   ├── retention_service.go        # retención de errores y auditoría
@@ -78,6 +79,7 @@ MediList/
 │   │   ├── derivacion_store.go         # derivaciones clínicas
 │   │   ├── transferencia_store.go      # historial de médico tratante
 │   │   ├── excepcion_derivacion_store.go # excepciones administrativas auditadas
+│   │   ├── notificacion_store.go       # outbox durable y preferencias
 │   │   ├── refresh_token_store.go      # refresh tokens hasheados
 │   │   ├── auditoria_store.go          # bitácora
 │   │   ├── error_store.go              # errores agregados
@@ -95,16 +97,18 @@ MediList/
 │       ├── medico_clinico_handler.go   # estados, nota y derivaciones
 │       ├── paciente_transfer_handler.go # transferencia de médico tratante
 │       ├── derivacion_admin_handler.go # excepción de derivación
+│       ├── notificacion_handler.go     # preferencias de notificación
 │       ├── request_context.go          # X-Request-ID, traceparent y trace_id
 │       ├── report_error.go             # envío de errores a la agregación
-│       ├── rate_limit.go               # límite de intentos por IP
-│       ├── middleware.go               # logging, recovery y cabeceras
+│       ├── rate_limit.go               # límite local de intentos por IP
+│       ├── middleware.go               # logging, recovery, CORS y cabeceras
 │       ├── dto.go                      # contratos JSON clínicos
 │       ├── auth_dto.go                 # contratos JSON de auth/usuarios
 │       ├── cuenta_dto.go               # contratos de registro y vinculación
 │       └── *_handler.go                # endpoints
 ├── docs/
-│   └── openapi.yaml                    # contrato OpenAPI hasta Fase 7
+│   ├── openapi.yaml                    # contrato OpenAPI hasta Fase 9
+│   └── runbook.md                      # TLS, backups, incidentes y carga
 ├── migrations/
 │   ├── 001_init.sql                    # tablas clínicas, índices y triggers
 │   ├── 002_seed.sql                    # especialidades iniciales
@@ -121,7 +125,9 @@ MediList/
 │   ├── 013_ownership_medico.sql        # ownership y retiro de permisos globales del médico
 │   ├── 014_pediatria_acceso_directo.sql # Pediatría como acceso directo (Fase 0)
 │   ├── 015_transferencia_interna.sql    # médico responsable, historial y permiso
-│   └── 016_excepciones_derivacion.sql   # excepciones administrativas auditadas
+│   ├── 016_excepciones_derivacion.sql   # excepciones administrativas auditadas
+│   ├── 017_notificaciones_outbox.sql    # outbox durable y preferencias
+│   └── 018_rate_limit.sql               # ventanas de rate limiting distribuidas
 ├── deploy/observability/               # Loki + Promtail + Grafana + alertas
 │   ├── docker-compose.yml
 │   ├── loki/loki-config.yml
@@ -134,6 +140,7 @@ MediList/
 │   ├── prueba_cuentas.ps1              # registro, tokens, reset y vinculación
 │   ├── prueba_ownership.ps1            # actor, vínculos, IDOR y permisos por fila
 │   ├── prueba_derivaciones.ps1         # prueba derivaciones, notas y metadata
+│   ├── prueba_carga_fase9.ps1          # login, disponibilidad y reserva concurrentes
 │   ├── solapes_citas.sql               # diagnostica solapes antes de migrar
 │   └── run.ps1                         # inicia la API
 ├── .env                                # configuración local (no versionar)
@@ -191,6 +198,11 @@ MediList/
    EMAIL_PROVIDER=outbox
    EMAIL_FROM=MediList <no-reply@medilist.local>
    EMAIL_OUTBOX_DIR=outbox/emails
+   # Si EMAIL_PROVIDER=smtp:
+   SMTP_HOST=
+   SMTP_PORT=587
+   SMTP_USER=
+   SMTP_PASSWORD=
    EMAIL_LINK_BASE_URL=http://localhost:3000
    EMAIL_VERIFICATION_HOURS=24
    PASSWORD_RESET_MINUTES=60
@@ -204,6 +216,22 @@ MediList/
    PORTAL_CANCEL_CUTOFF_HOURS=24
    AUTO_CONFIRM_PORTAL_BOOKINGS=true
    REFERRAL_VALID_DAYS=90
+
+   # Outbox y recordatorios.
+   NOTIFICATION_INTERVAL_SECONDS=30
+   NOTIFICATION_BATCH_SIZE=50
+   NOTIFICATION_MAX_ATTEMPTS=5
+   NOTIFICATION_BACKOFF_SECONDS=30
+   NOTIFICATION_REMINDER_HOURS=24,2
+
+   # Endurecimiento HTTP (Fase 9).
+   # Lista exacta de orígenes del frontend; vacío deshabilita CORS.
+   CORS_ALLOWED_ORIGINS=http://localhost:3000
+   # Solo si la API está detrás de un proxy inverso de confianza.
+   # TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
+   HSTS_ENABLED=false
+   METRICS_ENABLED=true
+   RATE_LIMIT_ENABLED=true
    ```
 
    Reemplaza `postgres` y `TU_PASSWORD_LOCAL` por el usuario y la contraseña que tengas configurados en tu propia instalación local de PostgreSQL. No publiques contraseñas reales en el README ni en archivos versionados.
@@ -252,7 +280,11 @@ MediList/
 
    La migración `016_excepciones_derivacion.sql` agrega el registro de excepciones administrativas para citas de especialista sin derivación. No crea derivaciones falsas: guarda motivo, cita, paciente, especialidad, médico y autorizador.
 
-   El correo de desarrollo se escribe en `outbox/emails/*.eml`; el token no aparece en logs. Antes de producción se debe implementar un proveedor real detrás de `service.EmailSender` y cambiar `EMAIL_PROVIDER`. La API actualmente solo acepta `EMAIL_PROVIDER=outbox` y emite una advertencia si se usa en producción.
+   La migración `017_notificaciones_outbox.sql` agrega el outbox durable y las preferencias de notificación. Las citas y derivaciones escriben el correo en la misma transacción; un worker lo envía con reintentos y backoff. `EMAIL_PROVIDER=outbox` escribe `.eml` locales; `EMAIL_PROVIDER=smtp` usa `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` y `SMTP_PASSWORD`.
+
+   El correo de desarrollo se escribe en `outbox/emails/*.eml`; el token no aparece en logs. Para producción configura `EMAIL_PROVIDER=smtp` y las variables `SMTP_*`; el proveedor SMTP usa STARTTLS cuando el servidor lo ofrece. El worker del outbox es independiente del proveedor y reintenta los fallos con backoff.
+
+   La migración `018_rate_limit.sql` agrega `rate_limit_buckets`, la ventana fija compartida entre réplicas para login, refresh, registro, verificación, recuperación y reservas. El rate limiter en memoria se conserva como primera barrera por instancia; PostgreSQL aplica el límite global. Si la base no responde, la capa distribuida falla abierto y registra el error para no bloquear todo el portal.
 
 3. **Iniciar la API**:
 
@@ -652,6 +684,8 @@ El perfil se resuelve exclusivamente desde `pacientes.usuario_id`. El body no ad
 | `POST` | `/portal/citas/{id}/cancelar` | `portal:citas:escribir` | Cancela; libera o consume la derivación según el corte |
 | `GET` | `/portal/derivaciones` | `portal:derivaciones:leer` | Derivaciones propias, incluyendo vencidas |
 | `GET` | `/portal/derivaciones/{id}` | `portal:derivaciones:leer` | Detalle solo si la derivación es propia |
+| `GET` | `/portal/preferencias-notificacion` | `portal:perfil:leer` | Preferencias de correo y recordatorios |
+| `PUT` | `/portal/preferencias-notificacion` | `portal:perfil:escribir` | Actualiza preferencias de correo/recordatorios |
 
 `/portal/medicos` devuelve solo datos públicos del profesional (nombres, especialidad, bio, foto y duración), nunca documento, email, teléfono ni dirección. `/portal/disponibilidad` genera slots en `CLINIC_TIMEZONE`, los entrega en UTC, resta bloqueos y citas `programada`/`confirmada`, aplica la antelación mínima y el horizonte máximo. Las fechas `desde`/`hasta` son inclusivas y el rango no puede superar el horizonte configurado.
 
@@ -721,6 +755,7 @@ La API está preparada para un agregador de logs (Loki, ELK/OpenSearch, CloudWat
 - **Errores del servidor HTTP:** `http.Server.ErrorLog` usa el mismo logger estructurado, de modo que los errores internos de `net/http` no quedan en texto plano fuera del agregador.
 - **Microservicios:** configura un `APP_SERVICE_NAME` distinto por servicio, propaga `traceparent`/`X-Request-ID` en las llamadas salientes y envía el stdout JSON al mismo agregador. El agregador puede reconstruir una transacción completa agrupando por `trace_id`; los campos `service`, `instancia` y `componente` distinguen servicio, réplica y capa.
 - **Retención automática:** un job interno purga `errores_aplicacion` y `auditoria` según `ERROR_RETENTION_DAYS` y `AUDIT_RETENTION_DAYS`. Se ejecuta al arrancar y cada `RETENTION_INTERVAL_HOURS`; `0` deshabilita la purga de esa tabla.
+- **Métricas Prometheus:** `GET /metrics` expone contadores sin etiquetas de usuario: registros, verificaciones, reservas, conversiones desde derivación, conflictos de slot, derivaciones, cancelaciones, notificaciones enviadas y fallos de email. Se controla con `METRICS_ENABLED`.
 - **Consulta:** `GET /api/v1/errores` con permiso `errores:leer` (admin y auditor). Filtros: `nivel`, `servicio`, `instancia`, `trace_id`, `search`, `limit`, `offset`.
 
 Ejemplo de consulta:
@@ -731,7 +766,7 @@ $errores = Invoke-RestMethod -Method Get `
   -Headers $headers
 ```
 
-Para producción, envía el stdout JSON al agregador, ajusta la retención automática a tu política y alerta sobre incrementos de `nivel=error`, `estado_http=500`, fallas de persistencia (`no se pudo persistir el error agregado`) y fallas de retención. No se registran contraseñas, tokens ni cuerpos de solicitud; aun así, restringe el acceso a `errores:leer` y `auditoria:leer` porque los mensajes pueden incluir detalles internos de SQL y datos de seguridad.
+Para producción, envía el stdout JSON al agregador, ajusta la retención automática a tu política y alerta sobre incrementos de `nivel=error`, `estado_http=500`, fallas de persistencia (`no se pudo persistir el error agregado`), fallas de retención, fallos de outbox y fallos de auditoría. No se registran contraseñas, tokens, cuerpos de solicitud, notas clínicas ni correos completos; los logs usan IDs, ruta, estado y latencia. La IP y el user agent se conservan en auditoría/errores para investigación y quedan sujetos a su retención. Restringe el acceso a `errores:leer` y `auditoria:leer` porque los mensajes pueden incluir detalles internos de SQL y datos de seguridad.
 
 ### Stack local con Loki, Promtail y Grafana
 
@@ -785,7 +820,9 @@ Qué incluye:
   - solicitudes con `status >= 500` en los últimos 5 minutos;
   - logs con `level=ERROR` en los últimos 5 minutos;
   - fallos `no se pudo persistir el error agregado` en los últimos 5 minutos;
-  - fallos de retención de errores o auditoría en la última hora.
+  - fallos de retención de errores o auditoría en la última hora;
+  - fallos de notificaciones/outbox en los últimos 15 minutos;
+  - fallos al registrar auditoría en los últimos 15 minutos.
 - **Webhook local:** las alertas se envían a `alert-sink`, que imprime el JSON recibido en `docker compose logs alert-sink`. Sustituye esa URL por Slack, Teams, PagerDuty o tu endpoint real en `deploy/observability/grafana/provisioning/alerting/contact-points.yml`.
 
 Verifica que los logs llegan a Loki:
@@ -995,6 +1032,39 @@ Las pruebas de la Fase 4 cubren:
 
 La Fase 5 no agrega una migración nueva: reutiliza las columnas de metadata de citas de la migración 011. La Fase 6 incorpora la migración 015 para la transferencia interna y la Fase 7 la 016 para excepciones administrativas de derivación. La prueba de integración del store se ejecuta con `TEST_DATABASE_URL` apuntando a una base migrada; se omiten automáticamente si la variable no existe. También se validó el flujo HTTP completo sobre una base temporal desde cero: crear médico, crear horario, consultar disponibilidad (2 slots), crear bloqueo (1 slot), rechazar solape y versión obsoleta con `409`, actualizar con `200` y desactivar horario (0 slots).
 
+Las pruebas de la Fase 8 cubren:
+
+- construcción de plantillas de cita y derivación sin datos clínicos sensibles;
+- encolado del outbox en la misma transacción que la cita o derivación;
+- envío exitoso y fallo con reintento/backoff;
+- recordatorios configurables con deduplicación;
+- preferencias de correo y recordatorios;
+- migración y worker sobre PostgreSQL.
+
+Las pruebas de la Fase 9 cubren:
+
+- ventana fija distribuida en PostgreSQL y rechazo con `429`/`Retry-After`;
+- CORS con allowlist y preflight sin token;
+- HSTS y headers de seguridad;
+- resolución de IP solo desde proxies de confianza;
+- métricas Prometheus sin etiquetas de usuario;
+- configuración inválida de CORS/proxies.
+
+La prueba de carga base se ejecuta contra un entorno con datos de staging:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_carga_fase9.ps1 `
+  -BaseUrl "http://localhost:8080" `
+  -Usuario "paciente.prueba" `
+  -Password "Password123!" `
+  -Iteraciones 10 -Concurrencia 3
+```
+
+Agrega `-Reservar` para probar también la creación de citas; los `409` por el
+mismo slot son esperados. El E2E de Fase 9 verificó health, HSTS, `/metrics`,
+preflight CORS permitido/denegado, login real y `429` en el intento 61 de
+refresh. También se probó un backup `pg_dump`/`pg_restore` en una base aislada: 24 tablas restauradas, incluida `rate_limit_buckets` y `notificaciones_outbox`.
+
 Las pruebas de la Fase 7 cubren:
 
 - reserva de especialista con derivación `pendiente`, consumo a `agendada` y bloqueo de reutilización;
@@ -1030,6 +1100,8 @@ El E2E de Fase 6 se ejecutó sobre una base temporal desde cero: el médico de M
 
 El E2E de Fase 7 se ejecutó sobre una base temporal desde cero: el paciente vio su derivación, reservó al especialista, la derivación pasó a `agendada`, una cancelación temprana la devolvió a `pendiente`, la reprogramación conservó la derivación, una cancelación tardía la consumió como `cancelacion_tardia` y el no-show como `no_show`. La excepción administrativa también quedó registrada con motivo y autorizador.
 
+El E2E de Fase 8 verificó que una cita crea su fila de outbox en la misma transacción, que el worker la envía al buzón/SMTP y que se generan recordatorios. El fallo/reintento con backoff se cubre con prueba unitaria del worker; las preferencias se cubren con prueba unitaria e integración.
+
 Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos registros concurrentes del mismo documento, verificación de un solo uso, token vencido y reutilizado, reset con revocación de refresh tokens, aprobación/rechazo de vinculación y vinculación de médico. También se prueba que el login de un paciente sin email verificado no emite sesión y que una contraseña incorrecta no revela el estado de verificación.
 
 ---
@@ -1047,6 +1119,8 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 | Derivacion | `derivaciones` | `DerivacionStore` |
 | TransferenciaPaciente | `transferencias_paciente` | `TransferenciaStore` |
 | ExcepcionDerivacion | `excepciones_derivacion` | `ExcepcionDerivacionStore` |
+| Notificacion | `notificaciones_outbox` | `NotificacionStore` |
+| PreferenciasNotificacion | `preferencias_notificacion` | `NotificacionStore` |
 | HorarioProfesional | `horarios_profesional` | `AgendaStore` |
 | BloqueoAgenda | `bloqueos_agenda` | `AgendaStore` |
 | Disponibilidad (calculada) | `horarios_profesional`, `bloqueos_agenda`, `citas` | `DisponibilidadService` |
@@ -1086,6 +1160,9 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 18. Una cita de especialista exige una derivación `pendiente`, vigente, del mismo paciente y de la especialidad/médico seleccionados; la reserva consume la derivación a `agendada` en la misma transacción con `FOR UPDATE`.
 19. Cancelar con antelación libera la derivación a `pendiente`; cancelar tarde o marcar no-show la consume como `cancelada` con motivo. Reprogramar conserva la misma derivación si sigue vigente.
 20. La sobrescritura administrativa no crea derivaciones falsas: registra una excepción con motivo y autorizador, y solo puede ejecutarla `admin` con `derivaciones:sobrescribir`.
+21. Las notificaciones de citas y derivaciones se escriben en `notificaciones_outbox` dentro de la misma transacción que el evento. La clave `dedupe_key` evita duplicados.
+22. El worker reclama pendientes con `SKIP LOCKED`, envía, marca `enviada` o registra `intentos`, `ultimo_error` y `proximo_intento`; los fallos se reintentan con backoff hasta `NOTIFICATION_MAX_ATTEMPTS`.
+23. Los recordatorios usan `NOTIFICATION_REMINDER_HOURS` y la misma deduplicación; las preferencias deshabilitadas omiten el envío.
 10. El refresh token se guarda como hash SHA-256; nunca en texto plano.
 11. La reutilización de un refresh token revocado revoca todas las sesiones del usuario.
 12. Cada access token incluye la versión de sesión (`ver`); si no coincide con `usuarios.token_version`, se rechaza aunque la firma sea válida.
@@ -1103,7 +1180,7 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 - **Contraseñas:** bcrypt con costo 12; mínimo 12 caracteres con mayúscula, minúscula, número y símbolo; máximo 72 bytes.
 - **JWT:** HS256, secreto de al menos 32 caracteres, emisor validado, expiración obligatoria y algoritmo restringido.
 - **Tokens:** access token de 15 minutos; refresh token de 7 días, rotativo, almacenado como hash y con detección de reutilización. La rotación consume el token anterior y crea el nuevo en una sola transacción.
-- **Fuerza bruta:** bloqueo de cuenta tras 5 intentos fallidos durante 15 minutos; el contador se incrementa de forma atómica en PostgreSQL y el límite de 30 solicitudes de login por minuto e IP se aplica en memoria por instancia.
+- **Fuerza bruta:** bloqueo de cuenta tras 5 intentos fallidos durante 15 minutos; el contador se incrementa de forma atómica en PostgreSQL. Login, refresh, registro, verificación, recuperación y reservas tienen una ventana fija distribuida en `rate_limit_buckets`; el limitador en memoria queda como primera barrera por instancia.
 - **Enumeración de usuarios:** misma respuesta para usuario inexistente o contraseña incorrecta; comparación bcrypt ficticia para igualar tiempos. El reenvío de verificación y la solicitud de reset responden de forma genérica aunque el email no exista.
 - **Registro público:** rate limit por IP, validación de edad, términos, contraseña y documento, y transacción única para evitar historias huérfanas. La cuenta queda inutilizable para login hasta verificar el email.
 - **Tokens de cuenta:** verificación y reset se guardan solo como SHA-256, con expiración y `usado_en`; el consumo es un `UPDATE ... WHERE usado_en IS NULL AND expira_en > $2 RETURNING`, por lo que dos solicitudes simultáneas no pueden usar el mismo token. Los intentos con token inválido/vencido se auditan sin asociarlos a una cuenta y están sujetos al rate limit.
@@ -1112,11 +1189,14 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 - **Correo de desarrollo:** escribe archivos `.eml` con permisos restrictivos y nunca registra el token; el enlace solo está en el buzón local. No uses `EMAIL_PROVIDER=outbox` en producción.
 - **RBAC:** permisos por recurso y acción, verificados en el middleware antes de llegar al handler.
 - **Auditoría:** logins, bloqueos, refresh, cambios de contraseña, escrituras y accesos denegados.
-- **Datos en tránsito y caché:** `Cache-Control: no-store`, `Pragma: no-cache`, CSP, `X-Frame-Options: DENY`, `nosniff` y política de permisos restrictiva.
+- **Datos en tránsito y caché:** `Cache-Control: no-store`, `Pragma: no-cache`, CSP, `X-Frame-Options: DENY`, `nosniff`, `Cross-Origin-Resource-Policy`, política de permisos restrictiva y HSTS configurable con `HSTS_ENABLED`.
+- **CORS:** allowlist exacta con `CORS_ALLOWED_ORIGINS`; los preflight se responden antes de autenticar. `*` se rechaza en producción.
+- **Proxy inverso:** `TRUSTED_PROXIES` permite aceptar `X-Forwarded-For`/`X-Real-IP` solo desde CIDR o IP de confianza; sin esa configuración se usa `RemoteAddr` y no se puede falsificar la IP.
 - **Entradas:** límite de cuerpo JSON de 1 MiB, `DisallowUnknownFields`, consultas SQL parametrizadas y traducción de errores de longitud/formato a `400`.
-- **Secretos:** `.env` está en `.gitignore`; usa `.env.example` como plantilla.
+- **Secretos:** `.env` está en `.gitignore`; usa `.env.example` como plantilla. No versiones `*.pem`, `*.key` ni credenciales SMTP.
 - **Sesiones:** al desactivar una cuenta, cambiar roles, cambiar contraseña o llamar a `revocar-sesiones` se incrementa `token_version`; el access token anterior falla de inmediato y los refresh tokens quedan revocados.
-- **Observabilidad:** logs JSON, W3C `traceparent`/`X-Request-ID`, `trace_id` en auditoría, tabla `errores_aplicacion` con `instancia`, retención automática y endpoints restringidos `GET /errores` y `GET /auditoria`.
+- **Observabilidad:** logs JSON, W3C `traceparent`/`X-Request-ID`, `trace_id` en auditoría, tabla `errores_aplicacion` con `instancia`, retención automática, métricas Prometheus en `GET /metrics` y endpoints restringidos `GET /errores` y `GET /auditoria`.
+- **Privacidad en logs:** no se registran cuerpos, contraseñas, tokens, notas clínicas ni correos completos. Los logs usan IDs, ruta, estado y latencia; la IP/user agent de auditoría y errores queda sujeta a retención.
 - **Concurrencia:** restricciones de exclusión para citas, horarios recurrentes y bloqueos de agenda; versiones optimistas para escrituras, transacciones para participantes y bloqueos de fila para autenticación; los conflictos de concurrencia se devuelven como `409` reintentables.
 
 ### Límites y recomendaciones para producción
@@ -1124,16 +1204,16 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 - El middleware de autenticación consulta `usuarios.token_version` en cada request protegido para lograr revocación inmediata. Es una consulta indexada por clave primaria; si el volumen lo exige, evalúa una caché con invalidación explícita, nunca con TTL largo.
 - La API no implementa TLS por sí misma: publícala detrás de un reverse proxy con HTTPS.
 - Para desarrollo se usa el usuario `postgres`. En producción crea un rol de base de datos con privilegios mínimos (solo DML sobre las tablas necesarias) y no uses superusuario.
-- No hay CORS configurado. Si la API se consume desde un frontend en otro origen, agrega un middleware con una lista blanca de orígenes.
+- Configura `CORS_ALLOWED_ORIGINS` con los orígenes exactos del frontend. En producción usa HTTPS en el proxy, `HSTS_ENABLED=true` y `TRUSTED_PROXIES` con la red del proxy; el runbook incluye un ejemplo de Nginx/Caddy.
 - No hay MFA ni cifrado de campos a nivel de aplicación. Evalúa `pgcrypto` o cifrado de disco según el marco regulatorio aplicable.
-- La recuperación de contraseña usa un buzón local de desarrollo. Antes de producción implementa un proveedor real detrás de `service.EmailSender`, configura SPF/DKIM/DMARC y protege el buzón o la cola de envío.
-- El rate limiter de registro, verificación, reenvío, recuperación y reset también está en memoria y es por instancia; con varias réplicas usa un limitador compartido.
+- La recuperación de contraseña y las notificaciones usan un buzón local en desarrollo. En producción configura `EMAIL_PROVIDER=smtp`, SPF/DKIM/DMARC y protege el buzón o la cola de envío; no uses el outbox local.
+- El rate limiter distribuido usa PostgreSQL y comparte la ventana entre réplicas; el limitador en memoria sigue activo como primera barrera. Si la base falla, la capa distribuida falla abierto y deja el evento en logs.
 - La aprobación de vinculación depende de que recepción valide la identidad por un canal aparte. El sistema evita duplicar la historia, pero no sustituye la verificación documental humana.
 - El solapamiento de agenda ya está garantizado en PostgreSQL con restricciones de exclusión para médico y paciente. Requiere la extensión `btree_gist` y que las citas históricas no tengan solapes al aplicar la migración `008`; usa `scripts/solapes_citas.sql` para revisarlas.
-- El rate limiter de login/refresh, registro, verificación, reenvío, recuperación y reset está en memoria y es por instancia. Si ejecutas varias réplicas, usa un limitador compartido (Redis, API gateway o WAF) para que el límite sea global.
+- Programa backups verificables de PostgreSQL, prueba la restauración y rota el secreto JWT/credenciales SMTP fuera del repositorio. El runbook de Fase 9 documenta el procedimiento y los rollbacks.
 - Los clientes deben serializar la renovación del refresh token. Un refresh concurrente con el mismo token se interpreta como reutilización y cierra todas las sesiones del usuario.
 - Las versiones optimistas hacen que dos escrituras simultáneas no se sobrescriban: el cliente que recibe `409` debe volver a consultar el recurso y reintentar con la versión actual.
-- La retención de `auditoria` y `errores_aplicacion` es automática; revisa sus valores antes de producción. Programa también la limpieza de `refresh_tokens` expirados. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.
+- La retención de `auditoria` y `errores_aplicacion` es automática; revisa sus valores antes de producción. Programa también la limpieza de `refresh_tokens` expirados, `rate_limit_buckets` antiguos y notificaciones enviadas antiguas. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.
 
 
 ## Contribuyentes y asistencia

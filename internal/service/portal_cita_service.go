@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"medilist/internal/observability"
 	"medilist/internal/service/entities"
 )
 
@@ -40,15 +41,16 @@ type PortalCitaReprogramarInput struct {
 // PortalCitaService implementa la agenda propia del paciente. Todas las
 // operaciones fuerzan el paciente desde el Actor y nunca desde el body/query.
 type PortalCitaService struct {
-	citas        CitaStore
-	pacientes    PacienteStore
-	medicos      MedicoStore
-	derivaciones DerivacionStore
-	slots        SlotValidator
-	email        EmailSender
-	cancelCutoff time.Duration
-	autoConfirm  bool
-	now          func() time.Time
+	citas          CitaStore
+	pacientes      PacienteStore
+	medicos        MedicoStore
+	derivaciones   DerivacionStore
+	slots          SlotValidator
+	email          EmailSender
+	notificaciones *NotificacionService
+	cancelCutoff   time.Duration
+	autoConfirm    bool
+	now            func() time.Time
 }
 
 // NewPortalCitaService construye el servicio de citas del portal.
@@ -84,6 +86,12 @@ func NewPortalCitaService(
 		autoConfirm:  cfg.AutoConfirm,
 		now:          now,
 	}
+}
+
+// SetNotificaciones inyecta el servicio de outbox sin cambiar el constructor
+// usado por las pruebas.
+func (s *PortalCitaService) SetNotificaciones(n *NotificacionService) {
+	s.notificaciones = n
 }
 
 // Crear agenda una cita para el paciente autenticado. El slot se valida contra
@@ -143,7 +151,10 @@ func (s *PortalCitaService) Crear(
 	usuarioID := actor.UsuarioID
 	cita := &entities.Cita{
 		PacienteID:         paciente.ID,
+		PacienteNombre:     paciente.Persona.NombreCompleto(),
 		MedicoID:           medico.ID,
+		MedicoNombre:       medico.Persona.NombreCompleto(),
+		EspecialidadNombre: medico.Especialidad.Nombre,
 		FechaHoraInicio:    slot.Inicio,
 		DuracionMin:        slot.DuracionMin,
 		Tipo:               tipo,
@@ -153,12 +164,28 @@ func (s *PortalCitaService) Crear(
 		CreadaPorUsuarioID: &usuarioID,
 		DerivacionID:       in.DerivacionID,
 	}
+	if s.notificaciones != nil {
+		cita.NotificacionPendiente = s.notificaciones.CitaCreada(cita, paciente)
+		if in.DerivacionID != nil {
+			cita.NotificacionMedicoPendiente = s.notificaciones.DerivacionReservada(cita, medico)
+		}
+	}
 	if in.DerivacionID != nil {
 		if err := s.citas.CrearConDerivacion(ctx, cita, *in.DerivacionID); err != nil {
+			if errors.Is(err, entities.ErrConflict) {
+				observability.IncConflictoSlot()
+			}
 			return nil, err
 		}
 	} else if err := s.citas.Crear(ctx, cita); err != nil {
+		if errors.Is(err, entities.ErrConflict) {
+			observability.IncConflictoSlot()
+		}
 		return nil, err
+	}
+	observability.IncReserva()
+	if in.DerivacionID != nil {
+		observability.IncConversion()
 	}
 	creada, err := s.citas.ObtenerPorID(ctx, cita.ID)
 	if err != nil {
@@ -271,6 +298,13 @@ func (s *PortalCitaService) Reprogramar(
 		}
 		cita.Motivo = motivo
 	}
+	if s.notificaciones != nil {
+		paciente, err := s.pacientePropio(ctx, actor)
+		if err != nil {
+			return nil, err
+		}
+		cita.NotificacionPendiente = s.notificaciones.CitaReprogramada(cita, paciente)
+	}
 	if err := s.citas.Actualizar(ctx, cita); err != nil {
 		return nil, err
 	}
@@ -316,6 +350,13 @@ func (s *PortalCitaService) Cancelar(
 
 	cita.Estado = entities.EstadoCitaCancelada
 	cita.MotivoCancelacion = motivo
+	if s.notificaciones != nil {
+		paciente, err := s.pacientePropio(ctx, actor)
+		if err != nil {
+			return nil, err
+		}
+		cita.NotificacionPendiente = s.notificaciones.CitaCancelada(cita, paciente)
+	}
 	var errCancelar error
 	if cita.DerivacionID != nil {
 		motivoDerivacion := ""
@@ -337,6 +378,7 @@ func (s *PortalCitaService) Cancelar(
 		}
 		return nil, errCancelar
 	}
+	observability.IncCancelacion()
 	return s.citas.ObtenerPorID(ctx, citaID)
 }
 

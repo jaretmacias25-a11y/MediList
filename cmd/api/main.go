@@ -30,6 +30,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "zona horaria de la clínica inválida: %v\n", err)
 		os.Exit(1)
 	}
+	if err := httpapi.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		fmt.Fprintf(os.Stderr, "configuración de proxies de confianza inválida: %v\n", err)
+		os.Exit(1)
+	}
 
 	logOutput := io.Writer(os.Stdout)
 	var logFile *observability.RotatingFileWriter
@@ -89,6 +93,8 @@ func main() {
 	derivacionStore := postgres.NewDerivacionStore(pool)
 	transferenciaStore := postgres.NewTransferenciaStore(pool)
 	excepcionDerivacionStore := postgres.NewExcepcionDerivacionStore(pool)
+	notificacionStore := postgres.NewNotificacionStore(pool)
+	rateLimitStore := postgres.NewRateLimitStore(pool)
 	agendaStore := postgres.NewAgendaStore(pool)
 	catalogoStore := postgres.NewCatalogoStore(pool)
 	usuarioStore := postgres.NewUsuarioStore(pool)
@@ -99,15 +105,36 @@ func main() {
 	cuentaStore := postgres.NewCuentaStore(pool)
 	actorStore := postgres.NewActorStore(pool)
 
-	emailSender, err := notificaciones.NewDevEmailSender(
-		cfg.EmailOutboxDir, cfg.EmailFrom, logger,
-	)
-	if err != nil {
-		logger.Error("no se pudo inicializar el buzón de correo", "error", err)
+	var emailSender service.EmailSender
+	var notificationSender service.NotificacionEmailSender
+	switch cfg.EmailProvider {
+	case "smtp":
+		smtpSender, err := notificaciones.NewSMTPEmailSender(
+			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword,
+			cfg.EmailFrom, logger,
+		)
+		if err != nil {
+			logger.Error("no se pudo inicializar SMTP", "error", err)
+			os.Exit(1)
+		}
+		emailSender = smtpSender
+		notificationSender = smtpSender
+	case "outbox":
+		devSender, err := notificaciones.NewDevEmailSender(
+			cfg.EmailOutboxDir, cfg.EmailFrom, logger,
+		)
+		if err != nil {
+			logger.Error("no se pudo inicializar el buzón de correo", "error", err)
+			os.Exit(1)
+		}
+		emailSender = devSender
+		notificationSender = devSender
+		if cfg.Env == "production" {
+			logger.Warn("EMAIL_PROVIDER=outbox es solo para desarrollo; configura SMTP antes de producción")
+		}
+	default:
+		logger.Error("EMAIL_PROVIDER no soportado", "provider", cfg.EmailProvider)
 		os.Exit(1)
-	}
-	if cfg.Env == "production" {
-		logger.Warn("EMAIL_PROVIDER=outbox es solo para desarrollo; configura un proveedor real antes de producción")
 	}
 
 	// Servicios (lógica de negocio)
@@ -148,6 +175,23 @@ func main() {
 	derivacionAdminService := service.NewDerivacionAdminService(
 		citaStore, medicoStore, excepcionDerivacionStore,
 	)
+	var rateLimitService *service.RateLimitService
+	if cfg.RateLimitEnabled {
+		rateLimitService = service.NewRateLimitService(rateLimitStore)
+	}
+	notificacionService := service.NewNotificacionService(
+		notificacionStore, notificationSender, citaStore, pacienteStore, logger,
+		service.NotificacionConfig{
+			Interval:      time.Duration(cfg.NotificationIntervalSeconds) * time.Second,
+			BatchSize:     cfg.NotificationBatchSize,
+			MaxAttempts:   cfg.NotificationMaxAttempts,
+			BackoffBase:   time.Duration(cfg.NotificationBackoffSeconds) * time.Second,
+			ReminderHours: cfg.NotificationReminderHours,
+		},
+	)
+	citaService.SetNotificaciones(notificacionService)
+	portalCitaService.SetNotificaciones(notificacionService)
+	medicoClinicoService.SetNotificaciones(notificacionService, pacienteStore)
 
 	authService := service.NewAuthService(service.AuthConfig{
 		JWTSecret:        cfg.JWTSecret,
@@ -182,30 +226,39 @@ func main() {
 	defer cancelRetention()
 	go retentionService.Run(retentionCtx)
 
+	notificacionCtx, cancelNotificacion := context.WithCancel(ctx)
+	defer cancelNotificacion()
+	go notificacionService.Run(notificacionCtx)
+
 	// Transporte (HTTP)
 	router := httpapi.NewRouter(httpapi.Dependencies{
-		Especialidades:   especialidadService,
-		Pacientes:        pacienteService,
-		Medicos:          medicoService,
-		Citas:            citaService,
-		Auth:             authService,
-		Usuarios:         usuarioService,
-		Cuentas:          cuentaService,
-		PortalPaciente:   portalPacienteService,
-		MedicoPortal:     medicoPortalService,
-		Agenda:           agendaService,
-		Catalogo:         catalogoService,
-		Disponibilidad:   disponibilidadService,
-		PortalCitas:      portalCitaService,
-		MedicoClinico:    medicoClinicoService,
-		PacienteTransfer: pacienteTransferService,
-		DerivacionAdmin:  derivacionAdminService,
-		Auditoria:        auditoriaService,
-		AuditoriaStore:   auditoriaStore,
-		ActorStore:       actorStore,
-		Errores:          errorService,
-		DB:               pool,
-		Logger:           logger,
+		Especialidades:     especialidadService,
+		Pacientes:          pacienteService,
+		Medicos:            medicoService,
+		Citas:              citaService,
+		Auth:               authService,
+		Usuarios:           usuarioService,
+		Cuentas:            cuentaService,
+		PortalPaciente:     portalPacienteService,
+		MedicoPortal:       medicoPortalService,
+		Agenda:             agendaService,
+		Catalogo:           catalogoService,
+		Disponibilidad:     disponibilidadService,
+		PortalCitas:        portalCitaService,
+		MedicoClinico:      medicoClinicoService,
+		PacienteTransfer:   pacienteTransferService,
+		DerivacionAdmin:    derivacionAdminService,
+		Notificaciones:     notificacionService,
+		RateLimiter:        rateLimitService,
+		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
+		HSTSEnabled:        cfg.HSTSEnabled,
+		MetricsEnabled:     cfg.MetricsEnabled,
+		Auditoria:          auditoriaService,
+		AuditoriaStore:     auditoriaStore,
+		ActorStore:         actorStore,
+		Errores:            errorService,
+		DB:                 pool,
+		Logger:             logger,
 	})
 
 	server := &http.Server{

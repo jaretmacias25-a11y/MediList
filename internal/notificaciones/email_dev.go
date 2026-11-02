@@ -75,6 +75,17 @@ func (s *DevEmailSender) EnviarResetPassword(
 	return s.escribir(ctx, "reset_password", destino, asunto, cuerpo)
 }
 
+// EnviarNotificacion escribe una entrada del outbox ya renderizada.
+func (s *DevEmailSender) EnviarNotificacion(
+	ctx context.Context,
+	n *entities.Notificacion,
+) error {
+	if n == nil {
+		return fmt.Errorf("notificación vacía")
+	}
+	return s.escribir(ctx, string(n.Tipo), n.Destinatario, n.Asunto, n.Cuerpo)
+}
+
 // EnviarCitaCreada escribe la confirmación básica de una cita del portal. La
 // Fase 8 la sustituirá por una notificación transaccional en outbox.
 func (s *DevEmailSender) EnviarCitaCreada(

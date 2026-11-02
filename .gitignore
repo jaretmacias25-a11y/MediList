@@ -16,6 +16,10 @@ coverage.out
 # Buzón local del adaptador de correo de desarrollo
 /outbox/
 
+# Certificados y llaves locales
+*.pem
+*.key
+
 # Editor
 .idea/
 .vscode/

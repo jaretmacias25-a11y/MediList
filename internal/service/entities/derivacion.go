@@ -66,6 +66,10 @@ type Derivacion struct {
 	Version               int64
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+
+	// NotificacionPendiente se inserta en el mismo outbox/transacción que la
+	// derivación.
+	NotificacionPendiente *Notificacion
 }
 
 // Vigente indica si la derivación puede usarse en este instante.

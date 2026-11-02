@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -87,12 +88,68 @@ func listOptions(r *http.Request) entities.ListOptions {
 	}.Normalized()
 }
 
+var trustedProxyNets []*net.IPNet
+
+// SetTrustedProxies configura las redes cuyos X-Forwarded-For son confiables.
+// Debe llamarse una vez al arrancar, antes de aceptar solicitudes.
+func SetTrustedProxies(valores []string) error {
+	redes := make([]*net.IPNet, 0, len(valores))
+	for _, valor := range valores {
+		if strings.Contains(valor, "/") {
+			_, red, err := net.ParseCIDR(valor)
+			if err != nil {
+				return fmt.Errorf("CIDR de proxy inválido %q: %w", valor, err)
+			}
+			redes = append(redes, red)
+			continue
+		}
+		ip := net.ParseIP(valor)
+		if ip == nil {
+			return fmt.Errorf("IP de proxy inválida %q", valor)
+		}
+		bits := 128
+		if ip.To4() != nil {
+			ip = ip.To4()
+			bits = 32
+		}
+		redes = append(redes, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	trustedProxyNets = redes
+	return nil
+}
+
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !esProxyConfiable(ip) {
 		return host
 	}
-	return r.RemoteAddr
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		partes := strings.Split(forwarded, ",")
+		for i := len(partes) - 1; i >= 0; i-- {
+			candidato := net.ParseIP(strings.TrimSpace(partes[i]))
+			if candidato == nil || esProxyConfiable(candidato) {
+				continue
+			}
+			return candidato.String()
+		}
+	}
+	if real := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); real != nil {
+		return real.String()
+	}
+	return host
+}
+
+func esProxyConfiable(ip net.IP) bool {
+	for _, red := range trustedProxyNets {
+		if red.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func citaFiltro(r *http.Request) (entities.CitaFiltro, error) {

@@ -233,3 +233,117 @@ groups:
         labels:
           severity: critical
           service: medilist-api
+
+      - uid: medilist_outbox_fallos
+        title: MediList - fallos de notificaciones/outbox
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: loki
+            model:
+              editorMode: code
+              expr: 'sum(count_over_time({job="medilist-api"} | json msg="msg" | msg=~"falló el envío de notificación|error al procesar outbox" [15m]))'
+              queryType: range
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: El outbox de notificaciones está fallando o acumulando errores.
+          description: Revisa el worker, el proveedor SMTP y la tabla notificaciones_outbox.
+        labels:
+          severity: warning
+          service: medilist-api
+
+      - uid: medilist_auditoria_fallos
+        title: MediList - fallo al registrar auditoría
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: loki
+            model:
+              editorMode: code
+              expr: 'sum(count_over_time({job="medilist-api"} | json msg="msg" | msg=~"no se pudo registrar la auditoría" [15m]))'
+              queryType: range
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: No se está persistiendo la auditoría de acciones sensibles.
+          description: Revisa PostgreSQL y la tabla auditoria; esto es un control de seguridad crítico.
+        labels:
+          severity: critical
+          service: medilist-api

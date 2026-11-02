@@ -36,6 +36,8 @@ func configValidaParaPruebas() Config {
 		EmailLinkBaseURL:     "http://localhost:3000",
 		EmailVerificationTTL: 24 * time.Hour,
 		PasswordResetTTL:     time.Hour,
+		SMTPHost:             "",
+		SMTPPort:             587,
 		TermsVersion:         "2026-10",
 		MinEdadCuenta:        18,
 
@@ -45,6 +47,17 @@ func configValidaParaPruebas() Config {
 		PortalCancelCutoffHours:   24,
 		AutoConfirmPortalBookings: true,
 		ReferralValidDays:         90,
+
+		NotificationIntervalSeconds: 30,
+		NotificationBatchSize:       50,
+		NotificationMaxAttempts:     5,
+		NotificationBackoffSeconds:  30,
+		NotificationReminderHours:   []int{24, 2},
+
+		CORSAllowedOrigins: []string{"http://localhost:3000"},
+		HSTSEnabled:        true,
+		MetricsEnabled:     true,
+		RateLimitEnabled:   true,
 	}
 }
 
@@ -150,6 +163,40 @@ func TestValidateZonaHorariaYHorizonteDelPortal(t *testing.T) {
 	cfg.ReferralValidDays = 0
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("la vigencia de derivación debe ser al menos un día")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.NotificationReminderHours = []int{24, 0}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("los recordatorios deben tener horas positivas")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.EmailProvider = "smtp"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("SMTP requiere host")
+	}
+	cfg.SMTPHost = "smtp.example.test"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("SMTP con host válido debería aceptarse: %v", err)
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.CORSAllowedOrigins = []string{"*"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("CORS no debe permitir '*' en producción")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.CORSAllowedOrigins = []string{"https://app.example.test/ruta"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("CORS debe rechazar orígenes con ruta")
+	}
+
+	cfg = configValidaParaPruebas()
+	cfg.TrustedProxies = []string{"no-es-una-ip"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("TRUSTED_PROXIES inválido debe rechazarse")
 	}
 }
 

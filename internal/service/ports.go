@@ -201,6 +201,37 @@ type CitaStore interface {
 	ExisteSolapePaciente(ctx context.Context, pacienteID int64, inicio time.Time, duracionMin int, excluirID int64) (bool, error)
 }
 
+// NotificacionStore es el outbox durable y las preferencias de notificación.
+type NotificacionStore interface {
+	Encolar(ctx context.Context, n *entities.Notificacion) error
+	ReclamarPendientes(
+		ctx context.Context,
+		ahora time.Time,
+		limite int,
+	) ([]entities.Notificacion, error)
+	MarcarEnviada(ctx context.Context, id int64, cuando time.Time) error
+	MarcarFallo(
+		ctx context.Context,
+		id int64,
+		motivo string,
+		proximoIntento time.Time,
+		maxIntentos int,
+	) error
+	ObtenerPreferencias(
+		ctx context.Context,
+		usuarioID int64,
+	) (*entities.PreferenciasNotificacion, error)
+	ActualizarPreferencias(
+		ctx context.Context,
+		p *entities.PreferenciasNotificacion,
+	) error
+}
+
+// NotificacionEmailSender envía una entrada del outbox ya renderizada.
+type NotificacionEmailSender interface {
+	EnviarNotificacion(ctx context.Context, n *entities.Notificacion) error
+}
+
 // UsuarioStore es el puerto de persistencia de usuarios y sus roles.
 type UsuarioStore interface {
 	BuscarPorUsername(ctx context.Context, username string) (*entities.Usuario, error)

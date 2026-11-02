@@ -165,6 +165,7 @@ func (s *CuentaService) RegistrarPaciente(
 			return nil, err
 		}
 		s.enviarVerificacion(ctx, usuario, tokenPlano, token.ExpiraEn)
+		observability.IncRegistro()
 		return &RegistroPacienteResultado{
 			Usuario: usuario, Solicitud: solicitud, VinculacionPendiente: true,
 		}, nil
@@ -176,6 +177,7 @@ func (s *CuentaService) RegistrarPaciente(
 			return nil, err
 		}
 		s.enviarVerificacion(ctx, usuario, tokenPlano, token.ExpiraEn)
+		observability.IncRegistro()
 		return &RegistroPacienteResultado{Usuario: usuario, Paciente: paciente}, nil
 
 	default:
@@ -198,6 +200,7 @@ func (s *CuentaService) VerificarEmail(
 		s.auditar(ctx, nil, "", "verificacion_email_fallida", ip, userAgent, estadoAuditoriaErrorCuenta(err))
 		return nil, err
 	}
+	observability.IncVerificacion()
 	return usuario, nil
 }
 

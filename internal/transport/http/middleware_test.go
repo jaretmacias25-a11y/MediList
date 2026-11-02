@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"medilist/internal/observability"
 	"medilist/internal/service"
@@ -36,7 +38,7 @@ func TestMiddlewareRegistraPanicConTraceID(t *testing.T) {
 
 	handler := withMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("fallo de prueba")
-	}), logger, errores)
+	}), logger, errores, nil, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
 	req.Header.Set("X-Request-ID", "test-trace-12345678")
@@ -88,6 +90,95 @@ func TestMiddlewareRegistraPanicConTraceID(t *testing.T) {
 	}
 	if stack, _ := errorLog["stack_trace"].(string); stack == "" {
 		t.Fatalf("stack_trace ausente en el log de error: %+v", errorLog)
+	}
+}
+
+func TestSecurityHeadersIncluyeHSTS(t *testing.T) {
+	handler := securityHeaders(true, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("Strict-Transport-Security") == "" {
+		t.Fatal("HSTS debe estar presente cuando está habilitado")
+	}
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("falta X-Content-Type-Options")
+	}
+}
+
+func TestCORSPreflightYOrigenNoPermitido(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := corsMiddleware([]string{"https://app.example.test"}, next)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/portal/citas", nil)
+	req.Header.Set("Origin", "https://app.example.test")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight esperado 204, obtenido %d", rec.Code)
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example.test" {
+		t.Fatalf("origen permitido ausente: %q", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/portal/citas", nil)
+	req.Header.Set("Origin", "https://evil.example.test")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatal("un origen no permitido no debe recibir cabecera CORS")
+	}
+}
+
+type fakeRateLimitStore struct {
+	permitido bool
+	espera    time.Duration
+}
+
+func (f *fakeRateLimitStore) Permitir(
+	context.Context,
+	string,
+	int,
+	time.Duration,
+) (bool, time.Duration, error) {
+	return f.permitido, f.espera, nil
+}
+
+func TestRateLimitMiddlewareDevuelve429(t *testing.T) {
+	limiter := service.NewRateLimitService(&fakeRateLimitStore{
+		permitido: false,
+		espera:    12 * time.Second,
+	})
+	handler := rateLimit(limiter, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		rateKeyIP("login"), 30, time.Minute,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req.RemoteAddr = "198.51.100.10:4567"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("estado esperado 429, obtenido %d", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") != "12" {
+		t.Fatalf("Retry-After inesperado: %q", rec.Header().Get("Retry-After"))
+	}
+}
+
+func TestMetricsHandlerExponeContadores(t *testing.T) {
+	observability.IncReserva()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	observability.MetricsHandler()(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "medilist_reservas_total") {
+		t.Fatalf("métricas inesperadas: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

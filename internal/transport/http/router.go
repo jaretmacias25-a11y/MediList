@@ -2,39 +2,91 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"medilist/internal/observability"
 	"medilist/internal/service"
 )
 
 // Dependencies agrupa los servicios que consume la capa de transporte.
 type Dependencies struct {
-	Especialidades   *service.EspecialidadService
-	Pacientes        *service.PacienteService
-	Medicos          *service.MedicoService
-	Citas            *service.CitaService
-	Auth             *service.AuthService
-	Usuarios         *service.UsuarioService
-	Cuentas          *service.CuentaService
-	PortalPaciente   *service.PortalPacienteService
-	MedicoPortal     *service.MedicoPortalService
-	Agenda           *service.AgendaService
-	Catalogo         *service.CatalogoService
-	Disponibilidad   *service.DisponibilidadService
-	PortalCitas      *service.PortalCitaService
-	MedicoClinico    *service.MedicoClinicoService
-	PacienteTransfer *service.PacienteTransferService
-	DerivacionAdmin  *service.DerivacionAdminService
-	Auditoria        *service.AuditoriaService
-	AuditoriaStore   service.AuditoriaStore
-	ActorStore       service.ActorStore
-	Errores          *service.ErrorService
-	DB               *pgxpool.Pool
-	Logger           *slog.Logger
+	Especialidades     *service.EspecialidadService
+	Pacientes          *service.PacienteService
+	Medicos            *service.MedicoService
+	Citas              *service.CitaService
+	Auth               *service.AuthService
+	Usuarios           *service.UsuarioService
+	Cuentas            *service.CuentaService
+	PortalPaciente     *service.PortalPacienteService
+	MedicoPortal       *service.MedicoPortalService
+	Agenda             *service.AgendaService
+	Catalogo           *service.CatalogoService
+	Disponibilidad     *service.DisponibilidadService
+	PortalCitas        *service.PortalCitaService
+	MedicoClinico      *service.MedicoClinicoService
+	PacienteTransfer   *service.PacienteTransferService
+	DerivacionAdmin    *service.DerivacionAdminService
+	Notificaciones     *service.NotificacionService
+	Auditoria          *service.AuditoriaService
+	AuditoriaStore     service.AuditoriaStore
+	ActorStore         service.ActorStore
+	Errores            *service.ErrorService
+	RateLimiter        *service.RateLimitService
+	CORSAllowedOrigins []string
+	HSTSEnabled        bool
+	MetricsEnabled     bool
+	DB                 *pgxpool.Pool
+	Logger             *slog.Logger
+}
+
+func rateLimit(
+	limiter *service.RateLimitService,
+	logger *slog.Logger,
+	key func(*http.Request) string,
+	limit int,
+	window time.Duration,
+	next http.Handler,
+) http.Handler {
+	if limiter == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		permitido, espera, err := limiter.Permitir(r.Context(), key(r), limit, window)
+		if err != nil {
+			logger.Error("no se pudo aplicar rate limiting distribuido", "error", err)
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !permitido {
+			segundos := int(espera.Seconds())
+			if segundos < 1 {
+				segundos = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(segundos))
+			writeError(w, http.StatusTooManyRequests, "rate_limited", "demasiadas solicitudes; espera un momento")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func rateKeyIP(prefijo string) func(*http.Request) string {
+	return func(r *http.Request) string { return prefijo + ":" + clientIP(r) }
+}
+
+func rateKeyActor(prefijo string) func(*http.Request) string {
+	return func(r *http.Request) string {
+		if actor := actorFromContext(r.Context()); actor != nil {
+			return fmt.Sprintf("%s:actor:%d", prefijo, actor.UsuarioID)
+		}
+		return prefijo + ":" + clientIP(r)
+	}
 }
 
 // NewRouter construye el enrutador HTTP con todas las dependencias inyectadas.
@@ -44,20 +96,30 @@ func NewRouter(d Dependencies) http.Handler {
 
 	// Públicas
 	mux.HandleFunc("GET /health", healthHandler(d.DB))
+	if d.MetricsEnabled {
+		mux.HandleFunc("GET /metrics", observability.MetricsHandler())
+	}
 
 	ah := NewAuthHandler(d.Auth, d.Logger)
-	mux.HandleFunc("POST /api/v1/auth/login", ah.Login)
-	mux.HandleFunc("POST /api/v1/auth/refresh", ah.Refresh)
+	mux.Handle("POST /api/v1/auth/login", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("login"), 30, time.Minute, http.HandlerFunc(ah.Login)))
+	mux.Handle("POST /api/v1/auth/refresh", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("refresh"), 60, time.Minute, http.HandlerFunc(ah.Refresh)))
 	mux.HandleFunc("POST /api/v1/auth/logout", ah.Logout)
 	mux.Handle("GET /api/v1/auth/me", auth.Require("", http.HandlerFunc(ah.Me)))
 	mux.Handle("POST /api/v1/auth/password", auth.Require("", http.HandlerFunc(ah.CambiarPassword)))
 
 	cuh := NewCuentaHandler(d.Cuentas, d.Logger)
-	mux.HandleFunc("POST /api/v1/auth/register", cuh.Registrar)
-	mux.HandleFunc("POST /api/v1/auth/verify-email", cuh.VerificarEmail)
-	mux.HandleFunc("POST /api/v1/auth/resend-verification", cuh.ReenviarVerificacion)
-	mux.HandleFunc("POST /api/v1/auth/forgot-password", cuh.SolicitarResetPassword)
-	mux.HandleFunc("POST /api/v1/auth/reset-password", cuh.RestablecerPassword)
+	mux.Handle("POST /api/v1/auth/register", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("register"), 5, time.Hour, http.HandlerFunc(cuh.Registrar)))
+	mux.Handle("POST /api/v1/auth/verify-email", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("verify"), 30, time.Minute, http.HandlerFunc(cuh.VerificarEmail)))
+	mux.Handle("POST /api/v1/auth/resend-verification", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("resend"), 3, 15*time.Minute, http.HandlerFunc(cuh.ReenviarVerificacion)))
+	mux.Handle("POST /api/v1/auth/forgot-password", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("forgot"), 5, 15*time.Minute, http.HandlerFunc(cuh.SolicitarResetPassword)))
+	mux.Handle("POST /api/v1/auth/reset-password", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("reset"), 10, 15*time.Minute, http.HandlerFunc(cuh.RestablecerPassword)))
 
 	protegido := func(pattern, permiso string, handler http.HandlerFunc) {
 		mux.Handle(pattern, auth.Require(permiso, handler))
@@ -133,6 +195,13 @@ func NewRouter(d Dependencies) http.Handler {
 	mux.Handle("PUT /api/v1/portal/perfil", auth.Require("portal:perfil:escribir",
 		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalHandler.ActualizarPerfil))))
 
+	nh := NewNotificacionHandler(d.Notificaciones, d.Logger)
+	mux.Handle("GET /api/v1/portal/preferencias-notificacion", auth.Require("portal:perfil:leer",
+		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_preferencias_notificacion", "preferencias_notificacion",
+			http.HandlerFunc(nh.ObtenerPreferencias))))
+	mux.Handle("PUT /api/v1/portal/preferencias-notificacion", auth.Require("portal:perfil:escribir",
+		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(nh.ActualizarPreferencias))))
+
 	catalogoHandler := NewCatalogoHandler(d.Catalogo, d.Disponibilidad, d.Logger)
 	protegido("GET /api/v1/portal/especialidades", "catalogo:leer", catalogoHandler.Especialidades)
 	protegido("GET /api/v1/portal/medicos", "catalogo:leer", catalogoHandler.Medicos)
@@ -140,7 +209,8 @@ func NewRouter(d Dependencies) http.Handler {
 
 	portalCitaHandler := NewPortalCitaHandler(d.PortalCitas, d.Logger)
 	mux.Handle("POST /api/v1/portal/citas", auth.Require("portal:citas:escribir",
-		auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalCitaHandler.Crear))))
+		rateLimit(d.RateLimiter, d.Logger, rateKeyActor("booking"), 20, time.Hour,
+			auditMutations(d.AuditoriaStore, d.Logger, http.HandlerFunc(portalCitaHandler.Crear)))))
 	mux.Handle("GET /api/v1/portal/citas", auth.Require("portal:citas:leer",
 		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_citas_propias", "citas",
 			http.HandlerFunc(portalCitaHandler.Listar))))
@@ -216,7 +286,7 @@ func NewRouter(d Dependencies) http.Handler {
 		writeError(w, http.StatusNotFound, "not_found", "ruta no encontrada")
 	})
 
-	return withMiddleware(mux, d.Logger, d.Errores)
+	return withMiddleware(mux, d.Logger, d.Errores, d.CORSAllowedOrigins, d.HSTSEnabled)
 }
 
 func healthHandler(db *pgxpool.Pool) http.HandlerFunc {

@@ -2,7 +2,7 @@
 
 > Fecha: 26/10/2026  
 > Alcance: backend Go/PostgreSQL. No incluye frontend.  
-> Estado: Fase 0 cerrada; fases 1–7 completadas; la Fase 8 (notificaciones y recordatorios) es la siguiente.
+> Estado: Fase 0 cerrada; fases 1–9 completadas; la Fase 10 (pruebas finales, despliegue y documentación) es la siguiente.
 > Documentos relacionados: `README.md` (estado actual) y `entidades.md` (modelo completo objetivo).
 
 ---
@@ -17,7 +17,7 @@ La base actual ya tiene una parte importante del backend administrativo:
 - control de concurrencia con restricciones de exclusión y versiones optimistas;
 - auditoría, logs estructurados y retención.
 
-La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. La **Fase 4 está implementada**: catálogo administrativo completo, CRUD de horarios/bloqueos, perfil público del médico, cálculo de disponibilidad por zona horaria, antelación y horizonte, y endpoints `/portal/especialidades`, `/portal/medicos` y `/portal/disponibilidad`. La **Fase 5 está implementada**: el paciente reserva, lista, consulta, reprograma y cancela sus propias citas en las cinco especialidades de acceso directo, con canal `portal_paciente`, versionado y control de carreras. La **Fase 6 también está implementada**: el médico cambia estados de sus citas, registra la nota de consulta, emite derivaciones desde Medicina General y administración puede transferir el médico tratante con historial y ownership por asignación. La **Fase 7 está implementada**: el paciente consulta sus derivaciones, reserva al especialista con consumo transaccional, la cancelación temprana libera la derivación, la tardía/no-show la consume, la reprogramación la conserva y existe una excepción administrativa auditada. Las notificaciones y el endurecimiento quedan en fases 8–9. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
+La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. La **Fase 4 está implementada**: catálogo administrativo completo, CRUD de horarios/bloqueos, perfil público del médico, cálculo de disponibilidad por zona horaria, antelación y horizonte, y endpoints `/portal/especialidades`, `/portal/medicos` y `/portal/disponibilidad`. La **Fase 5 está implementada**: el paciente reserva, lista, consulta, reprograma y cancela sus propias citas en las cinco especialidades de acceso directo, con canal `portal_paciente`, versionado y control de carreras. La **Fase 6 también está implementada**: el médico cambia estados de sus citas, registra la nota de consulta, emite derivaciones desde Medicina General y administración puede transferir el médico tratante con historial y ownership por asignación. La **Fase 7 está implementada**: el paciente consulta sus derivaciones, reserva al especialista con consumo transaccional, la cancelación temprana libera la derivación, la tardía/no-show la consume, la reprogramación la conserva y existe una excepción administrativa auditada. La **Fase 8 también está implementada**: outbox transaccional, worker con reintentos/backoff, plantillas, recordatorios, preferencias y proveedor SMTP opcional. El endurecimiento y las pruebas de despliegue quedan en las fases 9–10. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
 
 El orden recomendado para concluir el backend es:
 
@@ -29,7 +29,7 @@ El orden recomendado para concluir el backend es:
 6. ~~Permitir que el paciente agende las cinco áreas de acceso directo.~~ (completado)
 7. ~~Implementar el flujo médico mínimo y las derivaciones.~~ (completado)
 8. ~~Permitir que el paciente use una derivación para agendar al especialista.~~ (completado)
-9. Añadir notificaciones, pruebas, endurecimiento y despliegue controlado.
+9. ~~Añadir notificaciones y recordatorios.~~ (completado); quedan endurecimiento y despliegue controlado.
 
 La regla central solicitada queda así:
 
@@ -121,7 +121,7 @@ Pediatría será de **acceso directo para todos**, sin regla por edad. Se implem
 - **Especialidades solicitadas:** `FISIO`, `ODONTO`, `NUTRI` y `OTORRINO` están en el catálogo y se exponen en el portal; las cinco directas se pueden reservar desde la Fase 5.
 - **Derivaciones:** emisión médica, listado/detalle del paciente, consumo transaccional, liberación, cancelación tardía, no-show, vencimiento y excepción administrativa implementados.
 - **Autorización por fila:** un médico con `citas:leer` puede consultar todas las citas; el rol paciente existe, pero el patrón actual no está preparado para “solo lo mío”.
-- **Notificaciones transaccionales:** verificación y reset ya tienen correo de desarrollo; faltan recordatorios, confirmaciones y outbox durable.
+- **Notificaciones transaccionales:** outbox durable, worker, plantillas, recordatorios, preferencias y SMTP opcional implementados.
 - **Nota/atención clínica mínima:** una cita solo cambia de estado; no hay endpoint para registrar la consulta que justifique una derivación.
 - **Historia clínica completa:** diagnósticos, recetas, órdenes, exámenes y adjuntos no están implementados.
 - **Menores de edad:** el autorregistro exige mayoría de edad configurable; falta el flujo de tutor/representante.
@@ -438,6 +438,11 @@ SMTP_PORT=587
 SMTP_USER=
 SMTP_PASSWORD=
 SMTP_FROM=
+CORS_ALLOWED_ORIGINS=https://app.example.com
+TRUSTED_PROXIES=10.0.0.0/8
+HSTS_ENABLED=true
+METRICS_ENABLED=true
+RATE_LIMIT_ENABLED=true
 ```
 
 Los valores mostrados son defaults de desarrollo. En producción, `PORTAL_PACIENTE_ENABLED`, `DERIVACIONES_ENABLED` y `TRANSFERENCIAS_PACIENTE_ENABLED` se despliegan en `false` y se activan por entorno después de los smoke tests. Las flags se leen al iniciar la API, no por request.
@@ -807,40 +812,68 @@ ON CONFLICT DO NOTHING;
 - El historial es append-only y la asignación actual se refleja en `pacientes.medico_responsable_id`.
 - El nuevo médico obtiene acceso por asignación activa; el anterior conserva acceso solo por citas vigentes/atendidas.
 
-### 5.8 Migración 017 - notificaciones y outbox (propuesta)
+### 5.8 Migración 017 - notificaciones, outbox y preferencias
 
-La migración 016 se reserva para `excepciones_derivacion`, implementada en la Fase 7; el outbox de notificaciones pasa a la 017.
+**Estado:** implementada en la Fase 8.
+
+La migración 016 se usa para `excepciones_derivacion`; la 017 contiene `notificaciones_outbox` y `preferencias_notificacion`.
 
 Para no perder correos si el proveedor falla:
 
 ```sql
-CREATE TABLE IF NOT EXISTS notificaciones (
-    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    usuario_id     BIGINT REFERENCES usuarios (id) ON DELETE SET NULL,
-    canal          VARCHAR(15) NOT NULL CHECK (canal IN ('email', 'sms', 'push', 'in_app')),
-    tipo           VARCHAR(40) NOT NULL,
-    destinatario   TEXT NOT NULL,
-    asunto         TEXT NOT NULL DEFAULT '',
-    cuerpo         TEXT NOT NULL DEFAULT '',
-    estado         VARCHAR(15) NOT NULL DEFAULT 'pendiente'
-        CHECK (estado IN ('pendiente', 'enviada', 'fallida', 'cancelada')),
-    intentos       INTEGER NOT NULL DEFAULT 0,
-    programada_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    enviada_en     TIMESTAMPTZ,
-    ultimo_error   TEXT NOT NULL DEFAULT '',
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+CREATE TABLE notificaciones_outbox (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tipo            VARCHAR(40) NOT NULL,
+    usuario_id      BIGINT REFERENCES usuarios (id) ON DELETE SET NULL,
+    destinatario    VARCHAR(160) NOT NULL,
+    nombre          VARCHAR(120) NOT NULL DEFAULT '',
+    asunto          VARCHAR(200) NOT NULL,
+    cuerpo          TEXT NOT NULL,
+    estado          VARCHAR(15) NOT NULL DEFAULT 'pendiente'
+        CHECK (estado IN ('pendiente', 'enviando', 'enviada', 'fallida')),
+    intentos        INTEGER NOT NULL DEFAULT 0,
+    proximo_intento TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ultimo_error    TEXT NOT NULL DEFAULT '',
+    dedupe_key      VARCHAR(160) NOT NULL UNIQUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    enviada_en      TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS notificaciones_pendientes_idx
-    ON notificaciones (estado, programada_en);
+CREATE TABLE preferencias_notificacion (
+    usuario_id BIGINT PRIMARY KEY REFERENCES usuarios (id) ON DELETE CASCADE,
+    email_habilitado BOOLEAN NOT NULL DEFAULT TRUE,
+    recordatorios_habilitados BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
-- El registro de la cita y la notificación se harán en la misma transacción (outbox).
-- Un worker separado envía y reintenta.
-- Nunca se guardan tokens de verificación/reset en texto plano ni en logs.
-- La Fase 2 usa un adaptador de archivo para desarrollo; para producción, SMTP/SES/SendGrid detrás de `service.EmailSender`.
+- Citas y derivaciones escriben la notificación en la misma transacción (outbox).
+- Un worker separado reclama pendientes con `SKIP LOCKED`, envía y reintenta con backoff.
+- Los recordatorios usan `NOTIFICATION_REMINDER_HOURS` y `dedupe_key` para no duplicar.
+- Las preferencias deshabilitadas omiten el envío.
+- `EMAIL_PROVIDER=outbox` usa archivos `.eml`; `smtp` usa un proveedor SMTP real.
 
-### 5.9 Backfill y compatibilidad
+### 5.9 Migración 018 - rate limiting distribuido
+
+**Estado:** implementada en la Fase 9.
+
+```sql
+CREATE TABLE rate_limit_buckets (
+    clave          VARCHAR(220) PRIMARY KEY,
+    contador       INTEGER NOT NULL DEFAULT 0,
+    ventana_inicio TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+- La clave incluye el ámbito y el cliente (`login:<ip>`, `booking:actor:<id>`).
+- El `INSERT ... ON CONFLICT` incrementa o reinicia la ventana de forma atómica.
+- La tabla es compartida por todas las réplicas; no contiene datos clínicos.
+- La limpieza de filas antiguas es operativa y debe programarse fuera de la
+  ventana activa.
+
+### 5.10 Backfill y compatibilidad
 
 - No eliminar columnas existentes.
 - No cambiar el significado de `citas.estado` existente.
@@ -850,6 +883,7 @@ CREATE INDEX IF NOT EXISTS notificaciones_pendientes_idx
 - Los permisos globales de pacientes/citas para el rol `medico` se retiraron en la migración 013; la API mantiene además una guarda por roles para tokens antiguos.
 - La migración 014 solo cambia el flag de Pediatría; no altera historias clínicas.
 - La migración 015 deja `medico_responsable_id` nulo en pacientes existentes; la transferencia es opcional y se registra cuando ocurra.
+- La migración 018 es aditiva y solo crea `rate_limit_buckets`; no altera datos clínicos ni requiere backfill.
 - Probar la migración sobre una copia de la base actual y sobre una base vacía.
 
 ---
@@ -1302,21 +1336,24 @@ Tareas:
 
 ### Fase 8 — Notificaciones y recordatorios
 
+**Estado:** completada (Paso 12).
+
 **Objetivo:** que el flujo sea usable y no dependa de que el usuario revise la pantalla.
 
 Tareas:
 
-- Worker de outbox con reintentos y backoff.
-- Proveedor real de email.
-- Plantillas de verificación, reset, cita creada, confirmada, cancelada, reprogramada y derivación emitida.
-- Recordatorios configurables (por ejemplo, 24 h y 2 h antes).
-- Notificación al paciente cuando el médico emite una derivación.
-- Notificación al médico cuando se agenda una cita de su derivación.
-- Preferencias de notificación.
-- No incluir tokens ni datos clínicos sensibles en logs.
-- Idempotencia para no duplicar envíos.
+- [x] Worker de outbox con reintentos y backoff.
+- [x] Proveedor real de email (SMTP opcional; outbox local para desarrollo).
+- [x] Plantillas de verificación, reset, cita creada, confirmada, cancelada, reprogramada y derivación emitida.
+- [x] Recordatorios configurables (`NOTIFICATION_REMINDER_HOURS`, default 24,2).
+- [x] Notificación al paciente cuando el médico emite una derivación.
+- [x] Notificación al paciente al confirmar/cancelar/reprogramar su cita.
+- [x] Notificación al médico cuando se agenda una cita con su derivación.
+- [x] Preferencias de notificación.
+- [x] No incluir tokens ni datos clínicos sensibles en logs.
+- [x] Idempotencia por `dedupe_key`.
 
-**Criterio de salida:** los correos se encolan en la misma transacción que el evento; los fallos se reintentan; no se pierden notificaciones si el proveedor está caído.
+**Criterio de salida:** los correos se encolan en la misma transacción que la cita/derivación; los fallos se reintentan; no se pierden notificaciones si el proveedor está caído.
 
 ### Fase 9 — Endurecimiento de seguridad y operación
 
@@ -1481,19 +1518,19 @@ Una historia no está terminada si:
 - [x] Contraseñas con bcrypt y política existente.
 - [x] Tokens de verificación/reset hasheados, de un solo uso y con expiración.
 - [x] Reset de contraseña revoca sesiones.
-- [ ] Paciente solo accede a sus datos.
-- [ ] Médico solo accede a su agenda y a pacientes con relación de atención.
-- [ ] Recepción no accede a funciones clínicas.
+- [x] Paciente solo accede a sus datos (ownership por Actor y pruebas de portal).
+- [x] Médico solo accede a su agenda y a pacientes con relación de atención.
+- [x] Recepción no accede a funciones clínicas.
 - [ ] Admin con MFA antes de producción (si se habilita).
-- [ ] CORS con allowlist.
-- [ ] TLS en el proxy.
+- [x] CORS con allowlist.
+- [x] TLS en el proxy documentado; HSTS y headers en la API.
 - [x] Secretos fuera del repositorio.
-- [ ] Rate limiting distribuido.
+- [x] Rate limiting distribuido en PostgreSQL.
 - [x] Validación de payloads y límites de tamaño.
-- [ ] Redacción de PII en logs.
+- [x] Redacción de PII en logs (sin cuerpos, tokens ni notas clínicas).
 - [x] Consentimiento y términos versionados.
-- [ ] Backups y restauración probados.
-- [ ] Revisión de dependencias y contenedores.
+- [x] Backups y restauración probados en una base aislada (24 tablas, incluida `rate_limit_buckets`).
+- [ ] Revisión de dependencias y contenedores (se hará en la Fase 10).
 
 ### 9.2 Eventos de auditoría nuevos
 
@@ -2221,8 +2258,107 @@ No requiere migración nueva: reutiliza las columnas `canal`, `creada_por_usuari
 - `docs/openapi.yaml` validado con Redocly sin errores de contrato.
 - E2E sobre base temporal desde cero: derivación visible, reserva de especialista `201`, derivación `agendada`, cancelación temprana la deja `pendiente`, reprogramación la conserva, cancelación tardía la deja `cancelada/cancelacion_tardia`, no-show `cancelada/no_show` y excepción administrativa registrada. La base temporal se eliminó al finalizar.
 
-**Pendiente inmediato:** Fase 8 (notificaciones y recordatorios).
+**Pendiente inmediato:** Fase 9 (endurecimiento de seguridad y operación).
 
+### Paso 12 — Fase 8: notificaciones y recordatorios
 
+**Estado:** completado.
+
+**Archivos principales:**
+
+- `migrations/017_notificaciones_outbox.sql`: outbox durable y preferencias.
+- `internal/service/notificacion_service.go`: plantillas, worker, reintentos/backoff, recordatorios y preferencias.
+- `internal/repository/postgres/notificacion_store.go`: claim con `SKIP LOCKED`, estados, deduplicación y preferencias.
+- `internal/notificaciones/smtp.go`: proveedor SMTP opcional.
+- `internal/notificaciones/email_dev.go`: proveedor de buzón local y envío genérico de outbox.
+- `internal/transport/http/notificacion_handler.go`: preferencias del portal.
+- `cmd/api/main.go`: arranque del worker y selección outbox/SMTP.
+
+**Reglas implementadas:**
+
+- Citas y derivaciones insertan su notificación en el mismo outbox/transacción que el evento.
+- La `dedupe_key` única evita duplicados por cita/derivación/recordatorio.
+- El worker reclama pendientes con `FOR UPDATE SKIP LOCKED`, envía y marca `enviada`.
+- Un fallo incrementa `intentos`, guarda `ultimo_error` y programa `proximo_intento` con backoff exponencial.
+- Al alcanzar `NOTIFICATION_MAX_ATTEMPTS` la fila queda `fallida`, sin perder el registro.
+- Los recordatorios se configuran con `NOTIFICATION_REMINDER_HOURS` y respetan preferencias.
+- Las preferencias se exponen en `GET/PUT /portal/preferencias-notificacion`.
+- Los logs no incluyen tokens ni cuerpos clínicos.
+
+**Pruebas añadidas:**
+
+- `TestNotificacionServiceConstruyeCitaYDerivacion`
+- `TestNotificacionServiceProcesaExitoYFallo`
+- `TestNotificacionServicePreferencias`
+- `TestNotificacionServiceEncolaRecordatorio`
+- `TestNotificacionOutboxSeEncolaConLaCitaYSeProcesa` (integración PostgreSQL)
+- `TestNotificacionOutboxSeEncolaConLaDerivacion` (integración PostgreSQL)
+- `TestNotificacionStorePreferencias` (integración PostgreSQL)
+- E2E del worker, outbox y proveedor de correo.
+
+**Validación realizada:**
+
+- `gofmt -l .` sin salida.
+- `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan.
+- Migración 017 aplicada a `medilist`.
+- `docs/openapi.yaml` validado con Redocly sin errores de contrato.
+- E2E sobre base temporal desde cero: cita y derivación encoladas, worker envió correos y se generó el recordatorio configurado. El fallo/reintento y las preferencias se cubren con pruebas unitarias y de integración. La base temporal se eliminó al finalizar.
+
+**Pendiente inmediato:** Fase 9 (endurecimiento de seguridad y operación).
+
+### Paso 13 — Fase 9: endurecimiento de seguridad y operación
+
+**Estado:** completado.
+
+**Archivos principales:**
+
+- `migrations/018_rate_limit.sql`: ventanas fijas compartidas entre réplicas.
+- `internal/repository/postgres/rate_limit_store.go`: `INSERT ... ON CONFLICT` atómico.
+- `internal/service/rate_limit_service.go`: contrato de rate limiting distribuido.
+- `internal/transport/http/router.go`: límites para login, refresh, registro, verificación, reenvío, reset y reserva; CORS; `/metrics`.
+- `internal/transport/http/middleware.go`: allowlist CORS, preflight, HSTS y headers.
+- `internal/transport/http/helpers.go`: resolución segura de IP con `TRUSTED_PROXIES`.
+- `internal/observability/metrics.go`: contadores Prometheus sin etiquetas de usuario.
+- `internal/config/config.go`: `CORS_ALLOWED_ORIGINS`, `TRUSTED_PROXIES`, `HSTS_ENABLED`, `METRICS_ENABLED`, `RATE_LIMIT_ENABLED`.
+- `deploy/observability/grafana/provisioning/alerting/alert-rules.yml`: alertas de outbox y auditoría.
+- `docs/runbook.md`: TLS, CORS, secretos, backups, rollback, incidentes y carga.
+- `scripts/prueba_carga_fase9.ps1`: prueba base de login, disponibilidad y reserva.
+
+**Reglas y controles implementados:**
+
+- La ventana fija se comparte por PostgreSQL; si falla la capa distribuida, se registra y se falla abierto para no tumbar el portal.
+- Los límites se aplican por IP y, en reservas, por `usuario_id` del Actor.
+- CORS solo responde a orígenes exactos de la allowlist; `*` se rechaza en producción.
+- HSTS es configurable y los headers de seguridad se aplican a toda respuesta.
+- `X-Forwarded-For`/`X-Real-IP` solo se aceptan desde `TRUSTED_PROXIES`; sin esa lista se ignora el header.
+- Las métricas cubren registros, verificaciones, reservas, conversión desde derivación, conflictos de slot, derivaciones, cancelaciones, notificaciones y fallos de email.
+- No se registran cuerpos, contraseñas, tokens, notas clínicas ni correos completos.
+- La auditoría de acciones nuevas y los fallos de outbox/auditoría tienen alertas en Grafana/Loki.
+
+**Pruebas añadidas:**
+
+- `TestRateLimitServiceDelegaEnStore`.
+- `TestRateLimitMiddlewareDevuelve429`.
+- `TestRateLimitStoreComparteVentana` (integración PostgreSQL).
+- `TestSecurityHeadersIncluyeHSTS`.
+- `TestCORSPreflightYOrigenNoPermitido`.
+- `TestMetricsHandlerExponeContadores`.
+- `TestClientIPIgnoraXForwardedForSinProxyConfiable`.
+- `TestClientIPUsaXForwardedForDeProxyConfiable`.
+- `TestClientIPTomaLaEntradaNoConfiableMasCercana`.
+- Validación de configuración para CORS y proxies inválidos.
+
+**Validación realizada:**
+
+- `gofmt -l .` sin salida.
+- `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan.
+- Migración 018 aplicada a `medilist`; la prueba de integración del rate limiter pasa.
+- `scripts/prueba_ownership.ps1` pasó sobre una base temporal desde cero (migraciones 001–018 incluidas).
+- `docs/openapi.yaml` actualizado con `/metrics` y versión 0.10.0; Redocly lo valida sin errores de contrato.
+- E2E HTTP: health, HSTS, `/metrics`, preflight CORS permitido/denegado, login y `429` distribuido en el intento 61 de refresh.
+- Backup/restauración en base aislada: 24 tablas restauradas, incluidas `rate_limit_buckets` y `notificaciones_outbox`.
+- El stack Docker de observabilidad no se pudo levantar porque el motor de Docker Desktop estaba detenido; las reglas de alerta quedaron validadas como YAML y se activarán al iniciar el stack.
+
+**Pendiente inmediato:** Fase 10 (pruebas finales, despliegue y documentación).
 
 

@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,6 +48,12 @@ const derivacionSelect = `
 	LEFT JOIN personas mdp ON mdp.id = md.persona_id`
 
 func (s *DerivacionStore) Crear(ctx context.Context, d *entities.Derivacion) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return mapError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	const q = `
 		INSERT INTO derivaciones
 			(paciente_id, medico_origen_id, cita_origen_id,
@@ -58,13 +66,25 @@ func (s *DerivacionStore) Crear(ctx context.Context, d *entities.Derivacion) err
 	if d.MedicoDestinoID != nil {
 		medicoDestino = *d.MedicoDestinoID
 	}
-	err := s.db.QueryRow(ctx, q,
+	err = tx.QueryRow(ctx, q,
 		d.PacienteID, d.MedicoOrigenID, d.CitaOrigenID,
 		d.EspecialidadDestinoID, medicoDestino, d.Motivo,
 		string(d.Prioridad), string(d.Estado), d.VigenteDesde, d.VigenteHasta,
 		d.MotivoCancelacion,
 	).Scan(&d.ID, &d.Version, &d.CreatedAt, &d.UpdatedAt)
-	return mapError(err)
+	if err != nil {
+		return mapError(err)
+	}
+	if d.NotificacionPendiente != nil &&
+		d.NotificacionPendiente.Tipo == entities.NotificacionDerivacionEmitida &&
+		(d.NotificacionPendiente.DedupeKey == "" ||
+			strings.HasSuffix(d.NotificacionPendiente.DedupeKey, ":0")) {
+		d.NotificacionPendiente.DedupeKey = fmt.Sprintf("derivacion_emitida:%d", d.ID)
+	}
+	if err := insertarNotificacionTx(ctx, tx, d.NotificacionPendiente); err != nil {
+		return err
+	}
+	return mapError(tx.Commit(ctx))
 }
 
 func (s *DerivacionStore) ObtenerPorID(
