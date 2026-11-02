@@ -2,7 +2,7 @@
 
 > Fecha: 26/10/2026  
 > Alcance: backend Go/PostgreSQL. No incluye frontend.  
-> Estado: Fase 3 completada; la Fase 4 (catálogo, horarios y disponibilidad) es la siguiente.  
+> Estado: Fase 0 cerrada; fases 1–3 completadas; la Fase 4 (catálogo, horarios y disponibilidad) es la siguiente.  
 > Documentos relacionados: `README.md` (estado actual) y `entidades.md` (modelo completo objetivo).
 
 ---
@@ -17,7 +17,7 @@ La base actual ya tiene una parte importante del backend administrativo:
 - control de concurrencia con restricciones de exclusión y versiones optimistas;
 - auditoría, logs estructurados y retención.
 
-La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Todavía **no existe la disponibilidad calculada, la agenda de portal ni las acciones clínicas del médico**: eso corresponde a las fases 4–8. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
+La **Fase 2 ya está implementada**: registro público de pacientes, verificación de email, recuperación de contraseña, revocación de sesiones y vinculación con historias clínicas existentes sin duplicarlas. La **Fase 3 también está implementada**: el middleware resuelve un `Actor` con los vínculos de paciente/médico, `/auth/me` expone esos IDs, el paciente puede consultar y actualizar su contacto, el médico consulta su agenda y sus pacientes con relación de atención, y los endpoints administrativos de pacientes/citas están bloqueados para médicos incluso con tokens antiguos. Las **decisiones de la Fase 0 están cerradas** y la migración 014 deja Pediatría como acceso directo. Todavía **no existe la disponibilidad calculada, la agenda de portal ni las acciones clínicas del médico**: eso corresponde a las fases 4–8. También existen las migraciones y pruebas de esquema de disponibilidad y derivaciones.
 
 El orden recomendado para concluir el backend es:
 
@@ -26,14 +26,14 @@ El orden recomendado para concluir el backend es:
 3. ~~Implementar registro, verificación de cuenta y vinculación paciente/usuario.~~ (completado)
 4. Implementar autorización por fila: el paciente solo ve lo suyo y el médico solo ve su agenda.
 5. Crear catálogo, horarios y disponibilidad.
-6. Permitir que el paciente agende las cuatro áreas de acceso directo.
+6. Permitir que el paciente agende las cinco áreas de acceso directo.
 7. Implementar el flujo médico mínimo y las derivaciones.
 8. Permitir que el paciente use una derivación para agendar al especialista.
 9. Añadir notificaciones, pruebas, endurecimiento y despliegue controlado.
 
 La regla central solicitada queda así:
 
-> El paciente puede agendar directamente **Medicina General, Fisioterapia, Odontología y Nutrición**. Para cualquier otra especialidad necesita una **derivación vigente emitida por un médico de Medicina General después de una cita atendida**. Sin derivación, el backend rechaza la reserva del especialista.
+> El paciente puede agendar directamente **Medicina General, Fisioterapia, Odontología, Nutrición y Pediatría**. Para cualquier otra especialidad necesita una **derivación vigente emitida por un médico de Medicina General después de una cita atendida**. Sin derivación, el backend rechaza la reserva del especialista.
 
 Esta regla debe vivir en el servicio y en la base de datos, no solo en el frontend.
 
@@ -49,29 +49,47 @@ Si lo que se necesita es representar un vínculo familiar o de tutor (por ejempl
 
 ## 1. Supuestos y decisiones de producto
 
-Este cuadro conserva las decisiones de negocio. Las marcadas como implementadas ya están reflejadas en el esquema o en la Fase 2; las pendientes siguen abiertas.
+Este cuadro conserva las decisiones de negocio. **Fase 0 cerrada:** no quedan decisiones de producto pendientes; las marcadas como implementadas ya están reflejadas en el esquema o en las fases 1–3.
 
-| # | Tema | Propuesta inicial | Estado |
+| # | Tema | Decisión | Estado |
 |---|---|---|---|
-| 1 | Significado de “remitir a otro paciente” | Remitir a otro profesional/especialidad | Confirmar |
-| 2 | Especialidades de acceso directo | `MED-GEN`, `FISIO`, `ODONTO`, `NUTRI` | Implementado en catálogo |
+| 1 | Significado de “remitir a otro paciente” | Derivación clínica a otra especialidad/profesional y cambio interno de médico tratante; no incluye transferencia externa | Confirmado |
+| 2 | Especialidades de acceso directo | `MED-GEN`, `FISIO`, `ODONTO`, `NUTRI`, `PED` | Implementado en catálogo; migración 014 |
 | 3 | Especialidades que exigen derivación | Todas las demás, incluida `OTORRINO` | Implementado en catálogo |
 | 4 | Quién emite la derivación que habilita al especialista | Solo médico de Medicina General, desde una cita `atendida` | Implementado en trigger 011 |
-| 5 | Vigencia de la derivación | 90 días por defecto, configurable | Confirmar |
-| 6 | Uso de la derivación | Una derivación habilita una cita activa; si se cancela antes de la atención y sigue vigente, vuelve a `pendiente` | Parcial: índice 011 |
-| 7 | No asistencia del paciente a la cita de especialista | Consume la derivación; se requiere nueva valoración de Medicina General | Confirmar |
-| 8 | Excepción de emergencia | Recepción/admin puede sobrescribir con permiso, motivo y auditoría | Confirmar |
-| 9 | Registro de paciente | Requiere verificación de email antes de agendar | Implementado en Fase 2 |
+| 5 | Vigencia de la derivación | 90 días por defecto, configurable | Confirmado |
+| 6 | Uso de la derivación | Una derivación habilita una cita activa. Cancelar con al menos 24 h y estando vigente la devuelve a `pendiente`; cancelar después del límite o no asistir la consume. Reprogramar la conserva si sigue vigente y es la misma especialidad/médico | Confirmado; índice 011 |
+| 7 | No asistencia del paciente a la cita de especialista | Consume la derivación; se requiere nueva valoración de Medicina General | Confirmado |
+| 8 | Excepción de emergencia | Solo el rol `admin`, con `derivaciones:sobrescribir`, motivo obligatorio y auditoría | Confirmado |
+| 9 | Registro de paciente | Requiere email verificado antes del login y del refresh; no solo antes de agendar | Implementado en Fase 2 |
 | 10 | Paciente ya existente | No duplicar historia; vincular cuenta mediante recepción o verificación | Implementado en Fase 2 |
 | 11 | Cuenta de médico | La crea un administrador; el médico no se autorregistra | Implementado en Fase 2 |
-| 12 | Pediatría | Por defecto exige derivación, salvo que se configure como excepción para menores | Confirmar |
-| 13 | Menores de edad | Requieren tutor/representante en una fase posterior | Confirmar |
-| 14 | Zona horaria | Guardar en UTC; configurar zona de la clínica para slots y reportes | Confirmar |
-| 15 | Alcance clínico | Este plan cubre agenda, cuenta, derivaciones y nota mínima; historia clínica completa queda para P2 | Confirmado por alcance |
+| 12 | Pediatría | Acceso directo para todos; `PED.requiere_derivacion = false`; sin regla por edad | Confirmado; migración 014 |
+| 13 | Menores de edad | Autorregistro solo para adultos (18 años por defecto); tutor/representante en una fase posterior | Confirmado |
+| 14 | Zona horaria y agenda | `America/Guayaquil` para agenda y reportes; persistir en UTC; slot de 30 min configurable por especialidad; antelación mínima de 2 h; horizonte máximo de 90 días | Confirmado |
+| 15 | Alcance clínico | Este plan cubre agenda, cuenta, derivaciones, transferencia interna y nota mínima; historia clínica completa queda para P2 | Confirmado por alcance |
+| 16 | Transferencia interna | Cambio de médico tratante dentro de la clínica; admin/recepción con `pacientes:transferir`, motivo y auditoría; no hay transferencia externa | Confirmado; se implementa en Fase 6 |
 
-### Decisión recomendada sobre “pediatría”
+### 1.1 Decisión cerrada sobre “remitir”
 
-La regla solicitada dice que solo las cuatro áreas son de acceso directo. Pediatría es una especialidad; por tanto, con la regla literal, también requeriría derivación. Sin embargo, en la práctica un niño suele necesitar pediatra sin pasar por medicina general. Si se quiere una excepción, debe quedar configurada en el catálogo (`requiere_derivacion = false` para pediatría) o implementarse una regla por edad. No conviene esconder una excepción en el código.
+“Remitir” cubre dos flujos distintos:
+
+1. **Derivación clínica:** el médico de Medicina General deriva al paciente a otra especialidad o profesional. La historia y la cuenta no cambian de dueño.
+2. **Transferencia interna:** administración o recepción cambia el médico tratante del paciente dentro de la misma clínica. La historia, la cuenta y las citas se conservan.
+
+No se implementa transferencia a otra clínica ni intercambio de historias entre instituciones en este alcance.
+
+### 1.2 Decisión cerrada sobre Pediatría
+
+Pediatría será de **acceso directo para todos**, sin regla por edad. Se implementa con `PED.requiere_derivacion = false` en la migración 014. Esto amplía la regla original de cuatro especialidades a cinco; la fuente de verdad sigue siendo `especialidades.requiere_derivacion` y no se agregan listas hardcodeadas en el código.
+
+### 1.3 Transferencia interna de médico tratante
+
+- El paciente tendrá un `medico_responsable_id` opcional y un historial append-only de transferencias.
+- Solo `admin` y `recepción` con `pacientes:transferir` pueden ejecutarla; se exige motivo y auditoría.
+- El médico nuevo obtiene acceso por la asignación activa. El médico anterior conserva acceso solo a las citas que ya tenga programadas.
+- La transferencia no borra ni reescribe la historia y no cancela automáticamente citas futuras.
+- El detalle de esquema y endpoints se define en la Fase 6; la migración prevista es la 015.
 
 ---
 
@@ -126,7 +144,7 @@ La base de agenda, seguridad y cuentas es aprovechable, pero **el producto “pa
 | Nutrición | `NUTRI` | Directo | Nutricionista |
 | Otorrinolaringología | `OTORRINO` | Con derivación | Caso explícito del requerimiento |
 | Cardiología | `CARD` | Con derivación | Ya existe |
-| Pediatría | `PED` | Con derivación | Confirmar excepción para menores |
+| Pediatría | `PED` | Directo | Decisión de Fase 0: acceso directo para todos (migración 014) |
 | Ginecología | `GINE` | Con derivación | Ya existe |
 | Traumatología | `TRAUM` | Con derivación | Ya existe |
 | Dermatología | `DERM` | Con derivación | Ya existe |
@@ -176,13 +194,13 @@ Errores propuestos:
 
 ### 3.3 Ciclo de vida de la derivación
 
-Estados propuestos:
+Estados:
 
 - `pendiente`: creada por el médico, aún no usada.
 - `agendada`: vinculada a una cita activa de especialista.
 - `atendida`: el especialista atendió la cita.
 - `vencida`: pasó `vigente_hasta` sin completarse.
-- `cancelada`: anulada por el médico o administración.
+- `cancelada`: anulada por el médico/administración o consumida por cancelación tardía o no-show. En los dos últimos casos se registra `motivo_cancelacion` (`cancelacion_tardia` o `no_show`) y el estado es terminal.
 
 Transiciones:
 
@@ -192,22 +210,27 @@ Transiciones:
 | `pendiente` | Vence `vigente_hasta` | `vencida` |
 | `pendiente` | El médico de origen o un admin la cancela | `cancelada` |
 | `agendada` | El especialista marca la cita como `atendida` | `atendida` |
-| `agendada` | El paciente cancela antes del corte y sigue vigente | `pendiente` |
-| `agendada` | El paciente cancela después del corte o no asiste | `vencida` o `cancelada` según la política confirmada |
+| `agendada` | El paciente cancela con al menos 24 h de antelación y sigue vigente | `pendiente` |
+| `agendada` | El paciente cancela con menos de 24 h | `cancelada` (consumida) |
+| `agendada` | El paciente no asiste | `cancelada` (consumida) |
 | `agendada` | Vence `vigente_hasta` | `vencida` |
 | `agendada` | El médico de origen o un admin la cancela | `cancelada` |
+| `agendada` | Se reprograma a un slot válido de la misma especialidad/médico | `agendada` con la nueva cita |
 | `atendida`, `vencida`, `cancelada` | — | Estado terminal, no reutilizable |
 
 Reglas de transición:
 
 - Solo se crea desde una cita de Medicina General `atendida`.
+- La vigencia se calcula con `REFERRAL_VALID_DAYS=90` por defecto, configurable.
 - `pendiente -> agendada` ocurre en la misma transacción que crea la cita del especialista.
 - `agendada -> atendida` cuando el especialista marca la cita como `atendida`.
-- `agendada -> pendiente` si el paciente cancela antes del límite y la derivación sigue vigente.
+- `agendada -> pendiente` si el paciente cancela con al menos `CANCELACION_LIMITE_HORAS=24` y la derivación sigue vigente.
+- `agendada -> cancelada (consumida)` si cancela después del límite o no asiste; se exige `motivo_cancelacion`.
+- Reprogramar conserva la derivación si sigue vigente y no cambia la especialidad ni el médico; la cita anterior pasa a `reprogramada` y la nueva queda activa.
 - `pendiente/agendada -> vencida` por paso del tiempo; se puede calcular en consulta o con un job.
-- `pendiente/agendada -> cancelada` solo por médico de origen o admin, con motivo.
+- `pendiente/agendada -> cancelada` solo por médico de origen o admin, con motivo, salvo la cancelación tardía/no-show del paciente.
 - Una derivación `atendida`, `vencida` o `cancelada` no puede reutilizarse.
-- El no-show del paciente a la cita de especialista consume la derivación (decisión recomendada) o requiere una regla explícita distinta.
+- El no-show del paciente a la cita de especialista consume la derivación; se requiere una nueva valoración de Medicina General.
 
 Para defensa en profundidad, la base debe impedir que dos citas activas usen la misma derivación:
 
@@ -245,11 +268,10 @@ La reserva debe ser transaccional:
 
 - El paciente solo puede ver y modificar **sus** citas.
 - El paciente no puede elegir otro `paciente_id`; el servidor lo deriva de la sesión.
-- Puede agendar directamente las cuatro especialidades de acceso directo.
+- Puede agendar directamente las cinco especialidades de acceso directo.
 - No puede agendar un especialista sin derivación.
-- Puede cancelar su cita antes del límite configurado.
-- Puede reprogramar su cita; la operación debe usar `version` para evitar pérdidas concurrentes.
-- Si cancela una cita de especialista vinculada a una derivación, la derivación vuelve a `pendiente` si sigue vigente.
+- Puede cancelar su cita antes del límite configurado. Si cancela con al menos 24 h y la derivación sigue vigente, esta vuelve a `pendiente`; si cancela después del límite o no asiste, la derivación se consume (`cancelada` terminal con motivo).
+- Puede reprogramar su cita; la operación debe usar `version` para evitar pérdidas concurrentes. La derivación se conserva si sigue vigente y no cambia la especialidad ni el médico.
 - Si la cita es `atendida`, `no_asistio` o `cancelada`, no se puede reprogramar.
 - El estado inicial recomendado es `programada`; se puede autoconfirmar con `AUTO_CONFIRM_PORTAL_BOOKINGS=true`.
 - El paciente no puede cambiar médico, especialidad ni paciente en una reprogramación; para cambiar de profesional debe cancelar y crear otra cita.
@@ -263,7 +285,7 @@ La reserva debe ser transaccional:
 - Solo un médico de Medicina General puede emitir la derivación que habilita al paciente a ver un especialista.
 - La derivación se emite desde una cita `atendida`, no desde una cita solo `confirmada`.
 - El médico ve el motivo, la especialidad de destino y la vigencia de la derivación que emite.
-- El médico no puede derivar a otro paciente; deriva a otra especialidad o profesional.
+- El médico no puede transferir la historia ni cambiar el médico tratante por sí mismo; la derivación clínica es a otra especialidad o profesional. La reasignación interna la ejecuta admin/recepción con `pacientes:transferir`.
 
 ### 3.7 Reglas de recepción y administración
 
@@ -271,8 +293,9 @@ La reserva debe ser transaccional:
 - Recepción puede gestionar horarios y bloqueos si tiene `agenda:gestionar`.
 - Recepción puede vincular una cuenta a un paciente existente.
 - Recepción no puede emitir derivaciones clínicas.
-- Admin puede sobrescribir la regla de derivación con `derivaciones:sobrescribir`, indicando motivo; toda sobrescritura queda auditada.
+- Solo el rol `admin` puede sobrescribir la regla de derivación con `derivaciones:sobrescribir`, indicando motivo; toda sobrescritura queda auditada. Recepción no puede hacerlo.
 - La sobrescritura debe ser excepcional (urgencia, error operativo), no el flujo normal.
+- Admin y recepción con `pacientes:transferir` pueden cambiar el médico tratante dentro de la clínica, con motivo y auditoría. No pueden transferir la historia a otra institución.
 
 ### 3.8 Nota mínima de atención
 
@@ -287,6 +310,15 @@ Para que la derivación tenga sustento y no sea solo un botón, se recomienda un
 - `version`.
 
 No es la historia clínica completa. Es una nota de la consulta que permite auditar por qué se derivó. Diagnósticos codificados, recetas, órdenes y adjuntos quedan para P2.
+
+### 3.9 Transferencia interna de médico tratante
+
+- El paciente tendrá un `medico_responsable_id` opcional, con un historial append-only en `transferencias_paciente`.
+- Solo `admin` y `recepción` con `pacientes:transferir` pueden cambiar el médico tratante; el médico no puede asignarse pacientes a sí mismo.
+- La operación exige `medico_destino_id` activo, motivo y `version` del paciente; se ejecuta en una transacción y se audita.
+- El médico nuevo obtiene acceso por la asignación activa. El anterior conserva acceso solo mientras tenga citas `programada`, `confirmada` o `atendida`.
+- No se cancelan ni reasignan automáticamente citas futuras; si se requiere, se gestionan por separado.
+- No existe transferencia externa ni intercambio de historia entre instituciones en este alcance.
 
 ---
 
@@ -333,7 +365,7 @@ Permisos propuestos:
 |---|---|
 | `paciente` | `portal:perfil:leer`, `portal:perfil:escribir`, `portal:citas:leer`, `portal:citas:escribir`, `portal:derivaciones:leer`, `catalogo:leer` |
 | `medico` | `medico:agenda:leer`, `medico:agenda:escribir`, `medico:nota:escribir`, `derivaciones:leer`, `derivaciones:escribir`, `pacientes:atendidos:leer` |
-| `recepcion` | `agenda:gestionar`, `pacientes:leer`, `citas:leer`, `citas:escribir`, `cuentas:vincular` |
+| `recepcion` | `agenda:gestionar`, `pacientes:leer`, `pacientes:transferir`, `citas:leer`, `citas:escribir`, `cuentas:vincular` |
 | `admin` | Todo lo anterior más `derivaciones:sobrescribir`, `especialidades:escribir`, `usuarios:escribir` |
 | `auditor` | Lectura de auditoría, errores y reportes; sin escritura clínica |
 
@@ -393,6 +425,7 @@ Variables propuestas:
 ```env
 PORTAL_PACIENTE_ENABLED=true
 DERIVACIONES_ENABLED=true
+TRANSFERENCIAS_PACIENTE_ENABLED=false
 CLINIC_TIMEZONE=America/Guayaquil
 PORTAL_MIN_NOTICE_HOURS=2
 PORTAL_MAX_ADVANCE_DAYS=90
@@ -407,13 +440,17 @@ SMTP_PASSWORD=
 SMTP_FROM=
 ```
 
+Los valores mostrados son defaults de desarrollo. En producción, `PORTAL_PACIENTE_ENABLED`, `DERIVACIONES_ENABLED` y `TRANSFERENCIAS_PACIENTE_ENABLED` se despliegan en `false` y se activan por entorno después de los smoke tests. Las flags se leen al iniciar la API, no por request.
+
+Estrategia de migración: aditiva y expand/contract. Primero se agregan tablas/columnas compatibles, luego se despliega el código que las usa, después se activa la flag y solo en un release posterior se retira lo obsoleto. Nunca se elimina una columna o tabla en el mismo release que introduce el cambio.
+
 No hardcodear códigos de especialidad en el código. La lista directa se controla con `especialidades.requiere_derivacion`.
 
 ---
 
 ## 5. Modelo de datos y migraciones
 
-Numeración continua desde la última migración aplicada (`013_ownership_medico.sql`). Cada migración debe ser idempotente en lo posible, probarse desde cero y probarse sobre una copia de la base actual.
+Numeración continua desde la última migración aplicada (`014_pediatria_acceso_directo.sql`). Cada migración debe ser idempotente en lo posible, probarse desde cero y probarse sobre una copia de la base actual.
 
 ### 5.1 Migración 009 — cuentas, catálogo y permisos
 
@@ -715,7 +752,62 @@ CREATE UNIQUE INDEX IF NOT EXISTS solicitudes_vinculacion_usuario_pendiente_uk
 - No modifica tablas ni datos clínicos.
 - La API añade una guarda por roles en los endpoints administrativos para que un access token emitido antes de la migración no siga usándolos hasta expirar.
 
-### 5.6 Migración 014 — notificaciones y outbox (propuesta)
+### 5.6 Migración 014 — Pediatría de acceso directo
+
+**Estado:** aplicada. Archivo `migrations/014_pediatria_acceso_directo.sql`.
+
+```sql
+UPDATE especialidades
+SET requiere_derivacion = FALSE,
+    version = version + 1
+WHERE codigo = 'PED'
+  AND requiere_derivacion = TRUE;
+```
+
+- Pediatría queda como quinta especialidad de acceso directo.
+- No se introduce una regla por edad ni una lista hardcodeada; la fuente de verdad sigue siendo `especialidades.requiere_derivacion`.
+- La migración es idempotente y no modifica otras especialidades.
+
+### 5.7 Migración 015 — transferencia interna (propuesta)
+
+**Estado:** pendiente; se implementa en la Fase 6. Archivo previsto `migrations/015_transferencias_paciente.sql`.
+
+```sql
+ALTER TABLE pacientes
+    ADD COLUMN IF NOT EXISTS medico_responsable_id BIGINT
+        REFERENCES medicos (id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS pacientes_medico_responsable_idx
+    ON pacientes (medico_responsable_id)
+    WHERE medico_responsable_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS transferencias_paciente (
+    id                     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    paciente_id            BIGINT NOT NULL REFERENCES pacientes (id) ON DELETE RESTRICT,
+    medico_origen_id       BIGINT REFERENCES medicos (id) ON DELETE SET NULL,
+    medico_destino_id      BIGINT NOT NULL REFERENCES medicos (id) ON DELETE RESTRICT,
+    motivo                 TEXT NOT NULL,
+    creada_por_usuario_id  BIGINT NOT NULL REFERENCES usuarios (id) ON DELETE RESTRICT,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO permisos (codigo, modulo, descripcion)
+VALUES ('pacientes:transferir', 'pacientes', 'Cambiar el médico tratante dentro de la clínica')
+ON CONFLICT (codigo) DO NOTHING;
+
+INSERT INTO rol_permisos (rol_id, permiso_id)
+SELECT r.id, p.id
+FROM roles r
+JOIN permisos p ON p.codigo = 'pacientes:transferir'
+WHERE r.codigo IN ('admin', 'recepcion')
+ON CONFLICT DO NOTHING;
+```
+
+- Solo transferencia interna; no hay traslado a otra institución.
+- El historial es append-only y la asignación actual se refleja en `pacientes.medico_responsable_id`.
+- El nuevo médico obtiene acceso por asignación activa; el anterior conserva acceso solo por citas vigentes/atendidas.
+
+### 5.8 Migración 016 — notificaciones y outbox (propuesta)
 
 Para no perder correos si el proveedor falla:
 
@@ -746,7 +838,7 @@ CREATE INDEX IF NOT EXISTS notificaciones_pendientes_idx
 - Nunca se guardan tokens de verificación/reset en texto plano ni en logs.
 - La Fase 2 usa un adaptador de archivo para desarrollo; para producción, SMTP/SES/SendGrid detrás de `service.EmailSender`.
 
-### 5.7 Backfill y compatibilidad
+### 5.9 Backfill y compatibilidad
 
 - No eliminar columnas existentes.
 - No cambiar el significado de `citas.estado` existente.
@@ -754,6 +846,8 @@ CREATE INDEX IF NOT EXISTS notificaciones_pendientes_idx
 - Los pacientes históricos no tienen cuenta; se vinculan cuando lo soliciten.
 - Los médicos históricos no tienen usuario; administración los vincula.
 - Los permisos globales de pacientes/citas para el rol `medico` se retiraron en la migración 013; la API mantiene además una guarda por roles para tokens antiguos.
+- La migración 014 solo cambia el flag de Pediatría; no altera historias clínicas.
+- La migración 015 deja `medico_responsable_id` nulo en pacientes existentes; la transferencia es opcional y se registra cuando ocurra.
 - Probar la migración sobre una copia de la base actual y sobre una base vacía.
 
 ---
@@ -956,6 +1050,8 @@ Validaciones:
 | Método | Ruta | Acceso | Descripción |
 |---|---|---|---|
 | `POST` | `/pacientes/{id}/cuenta` | `cuentas:vincular` | Crea/vincula cuenta a paciente existente |
+| `POST` | `/pacientes/{id}/transferir` | `pacientes:transferir` | Cambia el médico tratante; exige `medico_destino_id`, motivo y `version` |
+| `GET` | `/pacientes/{id}/transferencias` | `pacientes:transferir` | Historial de transferencias internas |
 | `POST` | `/medicos/{id}/cuenta` | `usuarios:escribir` | Crea/vincula cuenta de médico |
 | `GET` | `/horarios` | `agenda:gestionar` | Lista horarios |
 | `POST` | `/horarios` | `agenda:gestionar` | Crea horario |
@@ -996,17 +1092,9 @@ No usar `403` para “requiere derivación” si se quiere que el frontend muest
 
 ### 6.7 OpenAPI
 
-Crear `docs/openapi.yaml` (o `api/openapi.yaml`) antes de implementar el frontend. Debe incluir:
+El esqueleto vive en `docs/openapi.yaml`. Ya incluye autenticación, catálogo, pacientes, médicos, citas administrativas, portal del paciente, portal del médico, cuentas, usuarios, auditoría y errores, con el sobre `data`/`meta`, el formato de error y los códigos base. Los endpoints de las fases 4–8 están listados en `x-pendientes` y se agregarán al contrato al implementarse.
 
-- esquemas de autenticación;
-- endpoints de portal y médico;
-- códigos de error de negocio;
-- ejemplos de cita directa y con derivación;
-- estados y transiciones;
-- parámetros de paginación y filtros;
-- ejemplos de `409`.
-
-La documentación debe mantenerse sincronizada con los handlers; no dejarla como archivo abandonado.
+Debe mantenerse sincronizado con los handlers; no dejarlo como archivo abandonado. Al agregar una ruta se actualizan el path, los esquemas de entrada/salida y los ejemplos de `409`.
 
 ---
 
@@ -1032,21 +1120,23 @@ La secuencia está diseñada para no construir endpoints sobre datos que todaví
 
 ### Fase 0 — Cerrar decisiones y contrato
 
+**Estado:** cerrada.
+
 **Objetivo:** evitar retrabajo en migraciones y endpoints.
 
 Tareas:
 
-- Confirmar la interpretación de “remitir a otro paciente”.
-- Confirmar las cuatro especialidades de acceso directo.
-- Confirmar si Pediatría es excepción para menores.
-- Definir vigencia de derivación, política de no-show, cancelación y reprogramación.
-- Definir si el registro exige verificación de email antes de login o solo antes de agendar.
-- Definir el flujo para pacientes que ya existen sin cuenta.
-- Definir permisos finales de `paciente`, `medico`, `recepcion` y `admin`.
-- Definir zona horaria, duración de slots y antelación mínima.
-- Crear el esqueleto de `docs/openapi.yaml`.
-- Definir códigos de error y formato de respuesta.
-- Definir feature flags y estrategia de migración.
+- [x] Confirmar la interpretación de “remitir a otro paciente”: derivación clínica y transferencia interna de médico tratante, sin transferencia externa.
+- [x] Confirmar las especialidades de acceso directo: `MED-GEN`, `FISIO`, `ODONTO`, `NUTRI` y `PED`.
+- [x] Confirmar a Pediatría como acceso directo para todos, sin regla por edad.
+- [x] Definir vigencia de derivación (90 días), política de no-show, cancelación (corte de 24 h) y reprogramación.
+- [x] Definir verificación de email antes del login y del refresh.
+- [x] Definir el flujo para pacientes que ya existen sin cuenta: vinculación, sin duplicar historia.
+- [x] Definir permisos finales de `paciente`, `medico`, `recepcion`, `enfermeria`, `auditor` y `admin`.
+- [x] Definir zona horaria (`America/Guayaquil`), slot de 30 min configurable, antelación de 2 h y horizonte de 90 días.
+- [x] Crear el esqueleto de `docs/openapi.yaml`.
+- [x] Definir códigos de error y formato de respuesta.
+- [x] Definir feature flags y estrategia de migración.
 
 **Criterio de salida:** decisiones registradas y contrato de API revisado. No se escribe código de negocio todavía.
 
@@ -1134,7 +1224,7 @@ Tareas:
 
 ### Fase 5 — Agenda directa del paciente
 
-**Objetivo:** que el paciente agende solo las cuatro áreas permitidas.
+**Objetivo:** que el paciente agende solo las cinco áreas permitidas.
 
 Tareas:
 
@@ -1150,11 +1240,11 @@ Tareas:
 - Auditar creación, cancelación y reprogramación.
 - Notificación básica de confirmación (aunque el envío real llegue en Fase 8).
 
-**Criterio de salida:** el paciente agenda Medicina General, Fisioterapia, Odontología y Nutrición; no puede agendar Cardiología u Otorrinolaringología sin derivación; no puede ver ni modificar citas ajenas; las carreras devuelven `409`.
+**Criterio de salida:** el paciente agenda Medicina General, Fisioterapia, Odontología, Nutrición y Pediatría; no puede agendar Cardiología u Otorrinolaringología sin derivación; no puede ver ni modificar citas ajenas; las carreras devuelven `409`.
 
-### Fase 6 — Flujo médico mínimo y derivaciones
+### Fase 6 — Flujo médico mínimo, derivaciones y transferencia interna
 
-**Objetivo:** que el médico atienda y derive correctamente.
+**Objetivo:** que el médico atienda y derive correctamente, y que administración pueda reasignar el médico tratante sin romper el ownership.
 
 Tareas:
 
@@ -1164,11 +1254,16 @@ Tareas:
 - `POST /medico/citas/{id}/derivaciones`.
 - `GET /medico/derivaciones`.
 - Validar cita atendida, médico de origen, especialidad `MED-GEN`, especialidad destino y vigencia.
-- Crear derivación en estado `pendiente`.
+- Crear derivación en estado `pendiente` con `vigente_hasta = now() + REFERRAL_VALID_DAYS`.
 - Auditar atención, nota y derivación.
+- Aplicar migración 015: `pacientes.medico_responsable_id`, historial `transferencias_paciente` y permiso `pacientes:transferir`.
+- `POST /pacientes/{id}/transferir` para `admin`/`recepción`, con `medico_destino_id`, motivo, `version` y auditoría.
+- `GET /pacientes/{id}/transferencias` para consultar el historial.
+- Extender `PerteneceAMedico` para incluir la asignación activa como relación de acceso.
 - Probar que un médico no puede derivar desde una cita ajena, no atendida o de otra especialidad.
+- Probar que un médico no puede transferirse pacientes a sí mismo ni leer pacientes sin asignación o cita.
 
-**Criterio de salida:** un médico de Medicina General atiende una cita y emite una derivación válida; un médico de otra especialidad no puede habilitar el acceso directo del portal.
+**Criterio de salida:** un médico de Medicina General atiende una cita y emite una derivación válida; un médico de otra especialidad no puede habilitar el acceso directo del portal; una transferencia interna cambia el acceso de forma auditada y el médico anterior no conserva acceso salvo por citas vigentes o atendidas.
 
 ### Fase 7 — Reserva de especialista con derivación
 
@@ -1182,15 +1277,16 @@ Tareas:
 - Validación transaccional con `FOR UPDATE`.
 - Consumir la derivación y marcarla `agendada`.
 - Índice único parcial para impedir dos citas activas con la misma derivación.
-- Cancelación de cita de especialista: liberar derivación si sigue vigente.
-- Reprogramación: mantener la misma derivación si no cambia de especialidad/médico.
+- Cancelación de cita de especialista: liberar la derivación a `pendiente` solo si se cancela con al menos `PORTAL_CANCEL_CUTOFF_HOURS=24` y sigue vigente.
+- Cancelación tardía: marcar la derivación `cancelada` con `motivo_cancelacion=cancelacion_tardia`; no reutilizable.
+- Reprogramación: mantener la misma derivación si no cambia de especialidad/médico y sigue vigente.
 - Marcar derivación `atendida` cuando la cita se atiende.
 - Job o consulta para marcar `vencida`.
-- No-show: consumir la derivación según la decisión confirmada.
-- Sobrescritura administrativa con permiso, motivo y auditoría.
+- No-show: consumir la derivación (`cancelada`, `motivo_cancelacion=no_show`); se requiere nueva valoración de Medicina General.
+- Sobrescritura administrativa solo para `admin` con `derivaciones:sobrescribir`, motivo y auditoría.
 - Prueba E2E completa.
 
-**Criterio de salida:** el paciente no puede saltarse la regla; la derivación se usa una sola vez; cancelar antes del corte la libera; una derivación vencida no permite reservar; la sobrescritura queda auditada.
+**Criterio de salida:** el paciente no puede saltarse la regla; la derivación se usa una sola vez; cancelar con 24 h o más la libera; cancelar tarde o no asistir la consume; una derivación vencida no permite reservar; la sobrescritura queda auditada y solo la ejecuta un admin.
 
 ### Fase 8 — Notificaciones y recordatorios
 
@@ -1286,7 +1382,7 @@ Tareas:
 1. Paciente se registra con documento nuevo.
 2. Verifica email.
 3. Inicia sesión.
-4. Consulta especialidades y ve cuatro directas.
+4. Consulta especialidades y ve cinco directas.
 5. Agenda Medicina General.
 6. Intenta agendar Otorrinolaringología y recibe `409 requiere_derivacion`.
 7. Médico de Medicina General inicia sesión, ve su agenda, marca la cita como `atendida`.
@@ -1332,7 +1428,7 @@ Tareas:
 
 ### 8.6 Pruebas de migración y regresión
 
-- Aplicar 009–013 sobre base vacía.
+- Aplicar 009–014 sobre base vacía.
 - Aplicar sobre copia de la base actual con citas, pacientes y médicos existentes.
 - Verificar que las citas históricas siguen consultables.
 - Verificar que los roles actuales no pierden acceso administrativo.
@@ -1449,7 +1545,7 @@ La Fase 2 registra `registro`, `registro_fallido`, `verificacion_email`, `verifi
 ### 10.1 Orden de despliegue
 
 1. Backup de base.
-2. Aplicar migraciones 009–013 en staging.
+2. Aplicar migraciones 009–014 en staging.
 3. Ejecutar pruebas de migración y regresión.
 4. Desplegar API con feature flags apagados.
 5. Crear/verificar catálogo y permisos.
@@ -1474,8 +1570,8 @@ La Fase 2 registra `registro`, `registro_fallido`, `verificacion_email`, `verifi
 - [ ] Un paciente se registra, verifica su email y entra.
 - [ ] Su cuenta está vinculada a un único paciente.
 - [ ] Ve solo su perfil, sus citas y sus derivaciones.
-- [ ] Agenda directamente Medicina General, Fisioterapia, Odontología y Nutrición.
-- [ ] No puede agendar un especialista sin derivación.
+- [ ] Agenda directamente Medicina General, Fisioterapia, Odontología, Nutrición y Pediatría.
+- [ ] No puede agendar una especialidad con derivación (por ejemplo, Cardiología) sin una derivación vigente.
 - [ ] Un médico ve solo su agenda.
 - [ ] Un médico de Medicina General marca una cita como atendida y emite una derivación.
 - [ ] El paciente usa la derivación para agendar al especialista.
@@ -1543,15 +1639,15 @@ Estos P2 no deben bloquear el flujo de cuenta, agenda y derivaciones. Si se inte
 
 | Riesgo / pregunta | Impacto | Mitigación |
 |---|---|---|
-| “Remitir a otro paciente” es ambiguo | Modelo incorrecto | Confirmar que es derivación a especialidad/profesional |
+| “Remitir a otro paciente” es ambiguo | Modelo incorrecto | Cerrado: derivación a especialidad/profesional + transferencia interna de médico tratante |
 | Paciente ya existe sin cuenta | Duplicidad de historia | No crear otro; vincular con verificación/recepción |
 | Documento duplicado en registro | Dos historias clínicas | Índice único y flujo de vinculación |
 | Médico con permisos globales | Privacidad | Actor + ownership; retirar permisos globales |
 | Paciente agenda especialista sin derivación | Se rompe la regla central | Validación transaccional + índice único |
 | Dos requests usan la misma derivación | Doble reserva | `FOR UPDATE` + índice parcial |
 | Horarios sin zona horaria | Slots incorrectos | Configurar `CLINIC_TIMEZONE`; tests |
-| No-show | derivación consumida o reutilizable | Confirmar política antes de implementar |
-| Pediatría | Regla incómoda para menores | Confirmar excepción configurable |
+| No-show | derivación consumida o reutilizable | Cerrado: consume y exige nueva valoración de Medicina General |
+| Pediatría | Regla incómoda para menores | Cerrado: acceso directo para todos, sin regla por edad |
 | Profesionales no médicos | Rol `medico` semánticamente incorrecto | Usar `tipo_profesional`; evaluar rol `profesional_salud` |
 | Email no configurado | No hay verificación/reset | Adaptador de desarrollo y proveedor real en P1 |
 | Migración sobre datos reales | Pérdida de datos | Backup, ensayo, migraciones aditivas |
@@ -1559,18 +1655,20 @@ Estos P2 no deben bloquear el flujo de cuenta, agenda y derivaciones. Si se inte
 | Observabilidad local | No hay producción | Completar reemplazo de Promtail y recolección durable |
 | Historia clínica completa | Scope creep | Mantener P2; nota mínima en P0 |
 
-### Preguntas que deben responderse antes de la Fase 1
+### Decisiones cerradas antes de la Fase 1
 
-1. ¿La derivación es a una especialidad, a un médico específico o a ambos?
-2. ¿La derivación se puede usar una vez o varias veces dentro de su vigencia?
-3. ¿Qué pasa si el paciente no asiste al especialista?
-4. ¿Qué pasa si el paciente cancela con poca antelación?
-5. ¿Pediatría es acceso directo para menores?
-6. ¿Se exige email verificado para login o solo para agendar?
-7. ¿Qué documento de identidad se usa y cómo se valida?
-8. ¿Se permite que un médico sea también paciente?
-9. ¿Qué profesionales entran en `FISIO`, `ODONTO` y `NUTRI`: solo médicos o profesionales independientes?
-10. ¿La clínica opera en una sola zona horaria y sede?
+| # | Pregunta | Decisión |
+|---|---|---|
+| 1 | ¿La derivación es a una especialidad, a un médico específico o a ambos? | A la especialidad y, opcionalmente, a un médico específico mediante `medico_destino_id`. |
+| 2 | ¿La derivación se puede usar una vez o varias veces dentro de su vigencia? | Una cita activa. Cancelar con 24 h o más la libera; reprogramar la conserva; atendida, vencida o consumida no se reutiliza. |
+| 3 | ¿Qué pasa si el paciente no asiste al especialista? | La derivación se consume (`cancelada`, `motivo_cancelacion=no_show`) y requiere nueva valoración de Medicina General. |
+| 4 | ¿Qué pasa si el paciente cancela con poca antelación? | Si cancela con menos de 24 h, la derivación se consume. El corte es configurable con `PORTAL_CANCEL_CUTOFF_HOURS`. |
+| 5 | ¿Pediatría es acceso directo para menores? | Sí, Pediatría es acceso directo para todos, sin regla por edad (migración 014). |
+| 6 | ¿Se exige email verificado para login o solo para agendar? | Antes del login y del refresh; no solo antes de agendar. |
+| 7 | ¿Qué documento de identidad se usa y cómo se valida? | Documento oficial normalizado (cédula/pasaporte) con validación estructural básica; integración con registro civil queda para P2. |
+| 8 | ¿Se permite que un médico sea también paciente? | El modelo lo permite con vínculos separados; no se implementa una experiencia dual en P0. |
+| 9 | ¿Qué profesionales entran en `FISIO`, `ODONTO` y `NUTRI`? | Se registran como profesionales en `medicos` con su especialidad; `tipo_profesional` queda para P2. |
+| 10 | ¿La clínica opera en una sola zona horaria y sede? | P0 asume una sede y `America/Guayaquil`; multi-sede queda para P2. |
 
 ---
 
@@ -1608,7 +1706,7 @@ Cada PR debe incluir:
 
 Si se necesita una demo rápida antes de completar P1, el orden mínimo es:
 
-1. Fase 0: confirmar reglas.
+1. Fase 0: reglas confirmadas (completada).
 2. Fase 1: migraciones 009–011.
 3. Fase 2: registro/verificación con adaptador de email de archivo (completada).
 4. Fase 3: actor/ownership (completada).
@@ -1825,7 +1923,7 @@ Incluye:
 - base de prueba temporal eliminada y datos HTTP de prueba eliminados;
 - `medilist` queda con 1 usuario (`admin`), 0 pacientes, 0 personas, 0 solicitudes y 0 tokens de cuenta.
 
-**Pendiente inmediato:** Fase 3 (ver Paso 6).
+**Siguiente:** Fase 3 completada (ver Paso 6).
 
 ### Paso 6 — Fase 3: Actor, ownership y portal básico
 
@@ -1870,6 +1968,34 @@ Incluye:
 - flujo HTTP real sobre base temporal: login de paciente/médico, `paciente_id`/`medico_id` en `/auth/me`, perfil propio, rechazo de `paciente_id` en el body, actualización de contacto, agenda propia, `403` contra cita/paciente ajenos, acceso global del administrador y auditoría de accesos propios/denegados;
 - el rol `medico` de `medilist` queda solo con permisos propios y de catálogo;
 - `derivaciones` y `notas_cita` todavía no tienen endpoints; la misma regla de ownership se aplicará al implementar su API en la Fase 6.
+
+### Paso 7 — Cierre de Fase 0: decisiones y contrato
+
+**Estado:** completado.
+
+Decisiones cerradas:
+
+- “Remitir” incluye derivación clínica a otra especialidad/profesional y transferencia interna de médico tratante; no hay transferencia externa.
+- Pediatría es de acceso directo para todos, sin regla por edad; migración 014.
+- Derivación: 90 días configurable, una cita activa, cancelación con 24 h o más la libera, cancelación tardía o no-show la consume, reprogramación la conserva si sigue vigente y es la misma especialidad/médico.
+- Excepción de emergencia: solo `admin` con `derivaciones:sobrescribir`, motivo y auditoría.
+- Email verificado antes del login y del refresh; autorregistro solo para adultos.
+- Agenda: `America/Guayaquil`, slots de 30 min configurables, antelación de 2 h y horizonte de 90 días.
+- Transferencia interna en Fase 6, con `pacientes:transferir`, motivo y auditoría.
+
+Artefactos:
+
+- `migrations/014_pediatria_acceso_directo.sql` aplicada a `medilist` y a una base temporal desde cero; segunda ejecución idempotente (`UPDATE 0`).
+- `internal/repository/postgres/catalogo_migracion_test.go` con `TestMigracionPediatriaAccesoDirecto`.
+- `docs/openapi.yaml` con los endpoints implementados y `x-pendientes` para las fases 4–8; validado con Redocly.
+- `README.md`, `doc.md` y `entidades.md` actualizados.
+
+Validación:
+
+- `gofmt -l .` sin salida.
+- `go build ./...`, `go vet ./...` y `go test -count=1 ./...` pasan.
+- `TestMigracionPediatriaAccesoDirecto` pasa sobre base temporal.
+- La base `medilist` conserva solo el usuario `admin` y el catálogo actualizado; no se agregaron datos clínicos.
 
 **Pendiente inmediato:** Fase 4 (catálogo, horarios y disponibilidad).
 

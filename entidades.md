@@ -26,7 +26,8 @@ Sistema de gestión para hospital / clínica.
 | Entidad | Propósito | Atributos clave |
 |---|---|---|
 | **Persona** | Datos de identidad comunes a pacientes y empleados | `id_persona` PK, `tipo_documento`, `numero_documento` UK, `nombres`, `apellidos`, `fecha_nacimiento`, `sexo`, `estado_civil`, `telefono`, `email`, `direccion`, `nacionalidad`, auditoría y borrado lógico |
-| **Paciente** | Perfil clínico-administrativo | `id_paciente` PK, `id_persona` FK UK, `usuario_id` FK UK (opcional), `numero_historia` UK, `grupo_sanguineo`, `factor_rh`, `contacto_emergencia_nombre`, `contacto_emergencia_telefono`, `fecha_registro`, `activo` |
+| **Paciente** | Perfil clínico-administrativo | `id_paciente` PK, `id_persona` FK UK, `usuario_id` FK UK (opcional), `medico_responsable_id` FK (opcional), `numero_historia` UK, `grupo_sanguineo`, `factor_rh`, `contacto_emergencia_nombre`, `contacto_emergencia_telefono`, `fecha_registro`, `activo` |
+| **TransferenciaPaciente** | Historial append-only del cambio interno de médico tratante | `id` PK, `paciente_id` FK, `medico_origen_id` FK, `medico_destino_id` FK, `motivo`, `creada_por_usuario_id` FK, `created_at` |
 | **Empleado** | Vínculo laboral | `id_empleado` PK, `id_persona` FK UK, `codigo_empleado` UK, `id_servicio` FK, `cargo`, `fecha_ingreso`, `fecha_salida`, `tipo_contrato`, `estado` |
 | **ProfesionalSalud** | Empleado habilitado para actos clínicos | `id_profesional` PK, `id_empleado` FK UK, `tipo_profesional` (médico, enfermero, etc.), `numero_licencia` UK, `firma_digital`, `activo` |
 | **Especialidad** | Catálogo de especialidades | `id_especialidad` PK, `codigo` UK, `nombre`, `descripcion` |
@@ -114,6 +115,8 @@ Las migraciones 008–011 materializan el modelo operativo de agenda:
 | `notas_cita` | Nota mínima de la consulta | `cita_id` UK, `medico_id`, `motivo`, `evaluacion`, `plan`, `version` |
 
 La entidad conceptual **Derivacion** se implementa como `derivaciones`, con la cita de origen (`cita_origen_id`) como encuentro habilitante. Una derivación solo nace de una cita de Medicina General `atendida`, la especialidad destino debe exigir derivación y una misma derivación no puede sostener dos citas activas o atendidas.
+
+Planificado para la Fase 6: `pacientes.medico_responsable_id` (asignación actual) y `transferencias_paciente` (historial). La transferencia es interna, exige `pacientes:transferir`, motivo y auditoría; el médico nuevo obtiene acceso por la asignación y el anterior conserva solo sus citas vigentes o atendidas.
 
 ---
 
@@ -203,6 +206,7 @@ erDiagram
     EMPLEADO ||--o| PROFESIONAL_SALUD : "es"
     PACIENTE ||--o{ CITA : "agenda"
     PROFESIONAL_SALUD ||--o{ CITA : "atiende"
+    PROFESIONAL_SALUD ||--o{ PACIENTE : "responsable"
     CITA ||--o| ENCUENTRO : "genera"
     ENCUENTRO ||--o{ DIAGNOSTICO : "registra"
     ENCUENTRO ||--o{ RECETA : "emite"
@@ -244,3 +248,4 @@ erDiagram
 18. **Verificación previa al portal:** una cuenta exclusivamente de paciente no inicia sesión hasta verificar el email. La verificación no sustituye la aprobación de la vinculación cuando la historia ya existía.
 19. **Tokens de cuenta de un solo uso:** verificación y reset se consumen con una actualización atómica; un token vencido o reutilizado devuelve `400`.
 20. **Reset seguro:** cambiar la contraseña por recuperación revoca refresh tokens e incrementa `token_version`; el access token anterior deja de funcionar de inmediato.
+21. **Transferencia interna:** solo `admin` o `recepción` con `pacientes:transferir` cambian el médico tratante. Se registra el origen, destino, motivo, actor y fecha; no se borra la historia ni se transfiere a otra institución.

@@ -1,0 +1,1214 @@
+openapi: 3.1.0
+info:
+  title: MediList API
+  version: 0.4.0
+  description: |
+    Esqueleto de contrato de la Fase 0. Describe los endpoints ya implementados
+    y los esquemas base de respuesta. Los endpoints de las fases 4-8 se agregan
+    a medida que se implementan; el roadmap está en doc.md.
+
+    Convenciones:
+    - Respuestas exitosas: {"data": ...} o {"data": [...], "meta": {...}}.
+    - Errores: {"error": {"code": "...", "message": "..."}, "request_id": "..."}.
+    - Fechas y horas en RFC 3339; la base de datos persiste en UTC.
+    - El paciente y el médico se resuelven desde la sesión, nunca desde el body.
+servers:
+  - url: http://localhost:8080
+    description: API local
+security:
+  - bearerAuth: []
+tags:
+  - name: Salud
+  - name: Autenticación
+  - name: Catálogo
+  - name: Pacientes
+  - name: Médicos
+  - name: Citas
+  - name: Portal paciente
+  - name: Portal médico
+  - name: Cuentas
+  - name: Usuarios
+  - name: Auditoría
+  - name: Errores
+
+paths:
+  /health:
+    get:
+      tags: [Salud]
+      summary: Estado de la API y la base de datos
+      security: []
+      responses:
+        '200':
+          description: API y base de datos disponibles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: ok}
+                  database: {type: string, example: up}
+        '503':
+          description: Base de datos no disponible
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: degraded}
+                  database: {type: string, example: down}
+
+  /api/v1/auth/login:
+    post:
+      tags: [Autenticación]
+      summary: Inicia sesión con username y contraseña
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200':
+          description: Tokens y datos del usuario
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TokenPairEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Autenticación]
+      summary: Rota el refresh token y emite un nuevo par de tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RefreshRequest'}
+      responses:
+        '200':
+          description: Nuevo par de tokens
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TokenPairEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Autenticación]
+      summary: Revoca el refresh token actual
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RefreshRequest'}
+      responses:
+        '204': {$ref: '#/components/responses/NoContent'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+
+  /api/v1/auth/me:
+    get:
+      tags: [Autenticación]
+      summary: Devuelve el actor actual, sus roles, permisos y vínculos
+      responses:
+        '200':
+          description: Datos de la cuenta y vínculos activos
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /api/v1/auth/password:
+    post:
+      tags: [Autenticación]
+      summary: Cambia la contraseña de la cuenta autenticada
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChangePasswordRequest'}
+      responses:
+        '204': {$ref: '#/components/responses/NoContent'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /api/v1/auth/register:
+    post:
+      tags: [Autenticación]
+      summary: Registro público de paciente
+      description: |
+        Crea una cuenta pendiente y, si el documento ya existe, una solicitud de
+        vinculación sin duplicar la historia clínica. No emite tokens.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegisterRequest'}
+      responses:
+        '201':
+          description: Cuenta creada; requiere verificación de email
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RegisterResponseEnvelope'}
+        '202':
+          description: Cuenta creada con solicitud de vinculación pendiente
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RegisterResponseEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /api/v1/auth/verify-email:
+    post:
+      tags: [Autenticación]
+      summary: Verifica el email con un token de un solo uso
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TokenRequest'}
+      responses:
+        '200':
+          description: Email verificado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+
+  /api/v1/auth/resend-verification:
+    post:
+      tags: [Autenticación]
+      summary: Reenvía el correo de verificación
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EmailRequest'}
+      responses:
+        '200':
+          description: Respuesta genérica
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /api/v1/auth/forgot-password:
+    post:
+      tags: [Autenticación]
+      summary: Solicita el restablecimiento de contraseña
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EmailRequest'}
+      responses:
+        '200':
+          description: Respuesta genérica
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /api/v1/auth/reset-password:
+    post:
+      tags: [Autenticación]
+      summary: Restablece la contraseña con un token de un solo uso
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ResetPasswordRequest'}
+      responses:
+        '200':
+          description: Contraseña restablecida
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+
+  /api/v1/especialidades:
+    get:
+      tags: [Catálogo]
+      summary: Lista especialidades
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Lista paginada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [Catálogo]
+      summary: Crea una especialidad
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EspecialidadRequest'}
+      responses:
+        '201':
+          description: Especialidad creada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /api/v1/especialidades/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Catálogo]
+      summary: Obtiene una especialidad
+      responses:
+        '200':
+          description: Especialidad
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Catálogo]
+      summary: Actualiza una especialidad
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EspecialidadRequest'}
+      responses:
+        '200':
+          description: Especialidad actualizada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      tags: [Catálogo]
+      summary: Elimina una especialidad si no está referenciada
+      responses:
+        '204': {$ref: '#/components/responses/NoContent'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/pacientes:
+    get:
+      tags: [Pacientes]
+      summary: Lista pacientes (solo personal administrativo)
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Lista paginada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [Pacientes]
+      summary: Crea persona y paciente en una transacción
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PacienteRequest'}
+      responses:
+        '201':
+          description: Paciente creado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/pacientes/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Pacientes]
+      summary: Obtiene un paciente (solo personal administrativo)
+      responses:
+        '200':
+          description: Paciente
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Pacientes]
+      summary: Actualiza un paciente con control de versión
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PacienteRequest'}
+      responses:
+        '200':
+          description: Paciente actualizado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      tags: [Pacientes]
+      summary: Desactiva un paciente
+      responses:
+        '204': {$ref: '#/components/responses/NoContent'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/medicos:
+    get:
+      tags: [Médicos]
+      summary: Lista médicos
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Lista paginada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [Médicos]
+      summary: Crea un médico
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MedicoRequest'}
+      responses:
+        '201':
+          description: Médico creado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/medicos/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Médicos]
+      summary: Obtiene un médico
+      responses:
+        '200':
+          description: Médico
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Médicos]
+      summary: Actualiza un médico con control de versión
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MedicoRequest'}
+      responses:
+        '200':
+          description: Médico actualizado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      tags: [Médicos]
+      summary: Desactiva un médico
+      responses:
+        '204': {$ref: '#/components/responses/NoContent'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/citas:
+    get:
+      tags: [Citas]
+      summary: Lista citas (solo personal administrativo)
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Lista paginada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [Citas]
+      summary: Crea una cita desde administración
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CitaRequest'}
+      responses:
+        '201':
+          description: Cita creada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409':
+          description: Solapamiento, derivación requerida o conflicto de versión
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+              examples:
+                requiereDerivacion:
+                  value:
+                    error:
+                      code: requiere_derivacion
+                      message: La especialidad requiere una derivación vigente
+                    request_id: 7f3c2a9e
+
+  /api/v1/citas/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Citas]
+      summary: Obtiene una cita (solo personal administrativo)
+      responses:
+        '200':
+          description: Cita
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Citas]
+      summary: Reprograma o actualiza una cita con control de versión
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CitaRequest'}
+      responses:
+        '200':
+          description: Cita actualizada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      tags: [Citas]
+      summary: Cancela/elimina una cita
+      responses:
+        '204': {$ref: '#/components/responses/NoContent'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/citas/{id}/estado:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    patch:
+      tags: [Citas]
+      summary: Cambia el estado de una cita
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CambiarEstadoRequest'}
+      responses:
+        '200':
+          description: Cita actualizada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/portal/perfil:
+    get:
+      tags: [Portal paciente]
+      summary: Perfil del paciente autenticado
+      responses:
+        '200':
+          description: Paciente y cuenta vinculada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    put:
+      tags: [Portal paciente]
+      summary: Actualiza teléfono, dirección y contacto de emergencia
+      description: No acepta documento, email de cuenta ni datos clínicos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PerfilUpdateRequest'}
+      responses:
+        '200':
+          description: Perfil actualizado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/medico/agenda:
+    get:
+      tags: [Portal médico]
+      summary: Agenda del médico autenticado
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Citas propias
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /api/v1/medico/citas/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Portal médico]
+      summary: Detalle de una cita propia
+      responses:
+        '200':
+          description: Cita
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/medico/pacientes/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Portal médico]
+      summary: Paciente con relación de atención
+      responses:
+        '200':
+          description: Paciente
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/cuentas/vinculaciones:
+    get:
+      tags: [Cuentas]
+      summary: Lista solicitudes de vinculación
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Solicitudes
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /api/v1/cuentas/vinculaciones/{id}/aprobar:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    post:
+      tags: [Cuentas]
+      summary: Aprueba una solicitud de vinculación
+      responses:
+        '200':
+          description: Vinculación aprobada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    description: El cuerpo puede incluir un motivo opcional.
+
+  /api/v1/cuentas/vinculaciones/{id}/rechazar:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    post:
+      tags: [Cuentas]
+      summary: Rechaza una solicitud y desactiva la cuenta pendiente
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [motivo]
+              properties:
+                motivo: {type: string, minLength: 1}
+      responses:
+        '200':
+          description: Solicitud rechazada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/cuentas/vincular-paciente:
+    post:
+      tags: [Cuentas]
+      summary: Vincula una cuenta existente con una historia de paciente
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VincularPacienteRequest'}
+      responses:
+        '200':
+          description: Cuenta vinculada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/cuentas/vincular-medico:
+    post:
+      tags: [Cuentas]
+      summary: Vincula una cuenta con un perfil de médico existente
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VincularMedicoRequest'}
+      responses:
+        '200':
+          description: Cuenta vinculada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/usuarios:
+    get:
+      tags: [Usuarios]
+      summary: Lista usuarios
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Lista paginada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+    post:
+      tags: [Usuarios]
+      summary: Crea una cuenta interna
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UsuarioCreateRequest'}
+      responses:
+        '201':
+          description: Usuario creado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/usuarios/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    get:
+      tags: [Usuarios]
+      summary: Obtiene un usuario
+      responses:
+        '200':
+          description: Usuario
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      tags: [Usuarios]
+      summary: Actualiza un usuario con control de versión
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UsuarioUpdateRequest'}
+      responses:
+        '200':
+          description: Usuario actualizado
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/usuarios/{id}/desbloquear:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    post:
+      tags: [Usuarios]
+      summary: Desbloquea una cuenta
+      responses:
+        '200':
+          description: Cuenta desbloqueada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/usuarios/{id}/revocar-sesiones:
+    parameters:
+      - {$ref: '#/components/parameters/Id'}
+    post:
+      tags: [Usuarios]
+      summary: Revoca todas las sesiones de una cuenta
+      responses:
+        '200':
+          description: Sesiones revocadas
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/roles:
+    get:
+      tags: [Usuarios]
+      summary: Lista roles y permisos
+      responses:
+        '200':
+          description: Roles
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Envelope'}
+
+  /api/v1/auditoria:
+    get:
+      tags: [Auditoría]
+      summary: Consulta la auditoría
+      parameters:
+        - {$ref: '#/components/parameters/Search'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Eventos de auditoría
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /api/v1/errores:
+    get:
+      tags: [Errores]
+      summary: Consulta los errores agregados
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Errores agregados
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ListEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    Search:
+      name: search
+      in: query
+      required: false
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema: {type: integer, minimum: 0, default: 0}
+
+  schemas:
+    JsonObject:
+      type: object
+      additionalProperties: true
+
+    Envelope:
+      type: object
+      required: [data]
+      properties:
+        data: {}
+
+    ListEnvelope:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: {}
+        meta:
+          type: object
+          properties:
+            limit: {type: integer}
+            offset: {type: integer}
+            count: {type: integer}
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string, example: validation_error}
+        message: {type: string}
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: {$ref: '#/components/schemas/Error'}
+        request_id: {type: string}
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password: {type: string, format: password}
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: {type: string}
+
+    ChangePasswordRequest:
+      type: object
+      required: [password_actual, password_nueva]
+      properties:
+        password_actual: {type: string, format: password}
+        password_nueva: {type: string, format: password, minLength: 12}
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      properties:
+        access_token: {type: string}
+        refresh_token: {type: string}
+        token_type: {type: string, example: Bearer}
+        expires_in: {type: integer, format: int64, example: 900}
+        usuario: {$ref: '#/components/schemas/Usuario'}
+
+    TokenPairEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data: {$ref: '#/components/schemas/TokenPair'}
+
+    Usuario:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        username: {type: string}
+        email: {type: string, format: email}
+        nombres: {type: string}
+        apellidos: {type: string}
+        activo: {type: boolean}
+        email_verificado: {type: boolean}
+        roles: {type: array, items: {type: string}}
+        permisos: {type: array, items: {type: string}}
+        paciente_id: {type: integer, format: int64}
+        medico_id: {type: integer, format: int64}
+        version: {type: integer, format: int64}
+
+    RegisterRequest:
+      type: object
+      required:
+        - username
+        - email
+        - password
+        - nombres
+        - apellidos
+        - tipo_documento
+        - numero_documento
+        - fecha_nacimiento
+        - acepta_terminos
+        - version_terminos
+      properties:
+        username: {type: string}
+        email: {type: string, format: email}
+        password: {type: string, format: password, minLength: 12}
+        nombres: {type: string}
+        apellidos: {type: string}
+        tipo_documento: {type: string, example: CEDULA}
+        numero_documento: {type: string}
+        fecha_nacimiento: {type: string, format: date, example: '1990-05-12'}
+        sexo: {type: string}
+        telefono: {type: string}
+        direccion: {type: string}
+        acepta_terminos: {type: boolean}
+        version_terminos: {type: string, example: '2026-10'}
+
+    RegisterResponseEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          properties:
+            usuario_id: {type: integer, format: int64}
+            paciente_id: {type: integer, format: int64}
+            solicitud_id: {type: integer, format: int64}
+            email: {type: string, format: email}
+            email_verificado: {type: boolean}
+            vinculacion_pendiente: {type: boolean}
+            mensaje: {type: string}
+
+    TokenRequest:
+      type: object
+      required: [token]
+      properties:
+        token: {type: string}
+
+    EmailRequest:
+      type: object
+      required: [email]
+      properties:
+        email: {type: string, format: email}
+
+    ResetPasswordRequest:
+      type: object
+      required: [token, password_nueva]
+      properties:
+        token: {type: string}
+        password_nueva: {type: string, format: password, minLength: 12}
+
+    EspecialidadRequest:
+      type: object
+      required: [codigo, nombre]
+      properties:
+        codigo: {type: string, example: MED-GEN}
+        nombre: {type: string}
+        descripcion: {type: string}
+        version: {type: integer, format: int64}
+
+    PersonaRequest:
+      type: object
+      required: [tipo_documento, numero_documento, nombres, apellidos]
+      properties:
+        tipo_documento: {type: string, example: CEDULA}
+        numero_documento: {type: string}
+        nombres: {type: string}
+        apellidos: {type: string}
+        fecha_nacimiento: {type: string, format: date}
+        sexo: {type: string}
+        telefono: {type: string}
+        email: {type: string, format: email}
+        direccion: {type: string}
+
+    PacienteRequest:
+      type: object
+      required: [persona]
+      properties:
+        persona: {$ref: '#/components/schemas/PersonaRequest'}
+        grupo_sanguineo: {type: string}
+        factor_rh: {type: string}
+        contacto_emergencia_nombre: {type: string}
+        contacto_emergencia_telefono: {type: string}
+        version: {type: integer, format: int64}
+
+    MedicoRequest:
+      type: object
+      required: [persona, especialidad_id, numero_licencia]
+      properties:
+        persona: {$ref: '#/components/schemas/PersonaRequest'}
+        especialidad_id: {type: integer, format: int64}
+        numero_licencia: {type: string}
+        tipo_profesional: {type: string}
+        version: {type: integer, format: int64}
+
+    CitaRequest:
+      type: object
+      required: [paciente_id, medico_id, fecha_hora_inicio, duracion_min]
+      properties:
+        paciente_id: {type: integer, format: int64}
+        medico_id: {type: integer, format: int64}
+        fecha_hora_inicio: {type: string, format: date-time}
+        duracion_min: {type: integer, minimum: 1}
+        tipo: {type: string}
+        motivo: {type: string}
+        estado: {type: string, enum: [programada, confirmada, atendida, no_asistio, cancelada, reprogramada]}
+        version: {type: integer, format: int64}
+
+    CambiarEstadoRequest:
+      type: object
+      required: [estado]
+      properties:
+        estado: {type: string, enum: [programada, confirmada, atendida, no_asistio, cancelada, reprogramada]}
+
+    PerfilUpdateRequest:
+      type: object
+      properties:
+        telefono: {type: string}
+        direccion: {type: string}
+        contacto_emergencia_nombre: {type: string}
+        contacto_emergencia_telefono: {type: string}
+        version: {type: integer, format: int64, description: Opcional; 0 significa sin control de versión}
+
+    VincularPacienteRequest:
+      type: object
+      required: [paciente_id, usuario_id]
+      properties:
+        paciente_id: {type: integer, format: int64}
+        usuario_id: {type: integer, format: int64}
+
+    VincularMedicoRequest:
+      type: object
+      required: [medico_id, usuario_id]
+      properties:
+        medico_id: {type: integer, format: int64}
+        usuario_id: {type: integer, format: int64}
+
+    UsuarioCreateRequest:
+      type: object
+      required: [username, email, nombres, apellidos, password, roles]
+      properties:
+        username: {type: string}
+        email: {type: string, format: email}
+        nombres: {type: string}
+        apellidos: {type: string}
+        password: {type: string, format: password, minLength: 12}
+        roles: {type: array, items: {type: string}}
+
+    UsuarioUpdateRequest:
+      type: object
+      required: [version]
+      properties:
+        email: {type: string, format: email}
+        nombres: {type: string}
+        apellidos: {type: string}
+        activo: {type: boolean}
+        roles: {type: array, items: {type: string}}
+        password: {type: string, format: password}
+        version: {type: integer, format: int64}
+
+  responses:
+    Ok:
+      description: Operación exitosa
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Envelope'}
+    Created:
+      description: Recurso creado
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Envelope'}
+    NoContent:
+      description: Sin contenido
+    BadRequest:
+      description: Solicitud inválida
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Unauthorized:
+      description: No autenticado o token inválido
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Forbidden:
+      description: Sin permiso, email no verificado o recurso ajeno
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    NotFound:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Conflict:
+      description: Conflicto de negocio o de versión
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Locked:
+      description: Cuenta bloqueada temporalmente
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    TooManyRequests:
+      description: Límite de solicitudes excedido
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+
+x-pendientes:
+  - fase: 4
+    endpoints:
+      - /api/v1/portal/disponibilidad
+  - fase: 5
+    endpoints:
+      - /api/v1/portal/citas
+      - /api/v1/portal/citas/{id}
+  - fase: 6
+    endpoints:
+      - /api/v1/medico/citas/{id}/nota
+      - /api/v1/medico/citas/{id}/derivaciones
+      - /api/v1/medico/derivaciones
+      - /api/v1/pacientes/{id}/transferir
+      - /api/v1/pacientes/{id}/transferencias
+  - fase: 7
+    endpoints:
+      - /api/v1/portal/derivaciones
+      - /api/v1/portal/derivaciones/{id}
+  - fase: 8
+    endpoints:
+      - /api/v1/notificaciones

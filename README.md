@@ -84,6 +84,8 @@ MediList/
 │       ├── auth_dto.go                 # contratos JSON de auth/usuarios
 │       ├── cuenta_dto.go               # contratos de registro y vinculación
 │       └── *_handler.go                # endpoints
+├── docs/
+│   └── openapi.yaml                    # contrato OpenAPI de Fase 0
 ├── migrations/
 │   ├── 001_init.sql                    # tablas clínicas, índices y triggers
 │   ├── 002_seed.sql                    # especialidades iniciales
@@ -97,7 +99,8 @@ MediList/
 │   ├── 010_disponibilidad.sql          # horarios recurrentes, bloqueos y exclusiones
 │   ├── 011_derivaciones_metadata.sql   # derivaciones, metadata de citas y notas
 │   ├── 012_cuentas_vinculacion.sql     # solicitudes de vinculación de cuentas
-│   └── 013_ownership_medico.sql        # ownership y retiro de permisos globales del médico
+│   ├── 013_ownership_medico.sql        # ownership y retiro de permisos globales del médico
+│   └── 014_pediatria_acceso_directo.sql # Pediatría como acceso directo (Fase 0)
 ├── deploy/observability/               # Loki + Promtail + Grafana + alertas
 │   ├── docker-compose.yml
 │   ├── loki/loki-config.yml
@@ -213,6 +216,8 @@ MediList/
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\prueba_ownership.ps1 -Password "TU_PASSWORD_LOCAL"
    ```
+
+   La migración `014_pediatria_acceso_directo.sql` deja Pediatría como especialidad de acceso directo (`requiere_derivacion = false`) para todos, sin regla por edad. Con esto, las especialidades directas son Medicina General, Fisioterapia, Odontología, Nutrición y Pediatría; el resto sigue exigiendo derivación desde una cita de Medicina General atendida.
 
    El correo de desarrollo se escribe en `outbox/emails/*.eml`; el token no aparece en logs. Antes de producción se debe implementar un proveedor real detrás de `service.EmailSender` y cambiar `EMAIL_PROVIDER`. La API actualmente solo acepta `EMAIL_PROVIDER=outbox` y emite una advertencia si se usa en producción.
 
@@ -519,6 +524,8 @@ Notas:
 | `GET` | `/especialidades/{id}` | `especialidades:leer` | Obtiene una especialidad |
 | `PUT` | `/especialidades/{id}` | `especialidades:escribir` | Actualiza una especialidad |
 | `DELETE` | `/especialidades/{id}` | `especialidades:escribir` | Elimina si no está referenciada |
+
+Acceso directo del paciente: `MED-GEN`, `FISIO`, `ODONTO`, `NUTRI` y `PED`. El resto exige derivación vigente; la fuente de verdad es `especialidades.requiere_derivacion`, no una lista en el código. El contrato OpenAPI está en `docs/openapi.yaml`.
 
 ### Pacientes
 
