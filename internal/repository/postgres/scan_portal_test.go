@@ -44,7 +44,7 @@ func TestScanUsuarioIncluyeCamposDeCuenta(t *testing.T) {
 	actualizado := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
 
 	u, err := scanUsuario(filaFalsa{valores: []any{
-		int64(7), "juan", "juan@example.com", "hash", "Juan", "Pérez",
+		int64(7), "juan", "juan@example.com", pgtype.Text{String: "hash", Valid: true}, pgtype.Text{String: "user_123", Valid: true}, "Juan", "Pérez",
 		true, 3, 1,
 		pgtype.Timestamptz{Time: bloqueado, Valid: true},
 		pgtype.Timestamptz{},

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"time"
 
+	"medilist/internal/auth"
 	"medilist/internal/config"
 	"medilist/internal/notificaciones"
 	"medilist/internal/observability"
@@ -193,16 +194,27 @@ func main() {
 	portalCitaService.SetNotificaciones(notificacionService)
 	medicoClinicoService.SetNotificaciones(notificacionService, pacienteStore)
 
+	var authOpciones []service.ClerkVerifier
+	if cfg.ClerkSecretKey != "" {
+		verificador, err := auth.NewVerificadorClerk(cfg.ClerkSecretKey, cfg.ClerkAuthorizedParties...)
+		if err != nil {
+			logger.Error("CLERK_SECRET_KEY inválida", "error", err)
+			os.Exit(1)
+		}
+		authOpciones = append(authOpciones, verificador)
+	}
 	authService := service.NewAuthService(service.AuthConfig{
-		JWTSecret:        cfg.JWTSecret,
-		JWTIssuer:        cfg.JWTIssuer,
-		AccessTTL:        cfg.AccessTokenTTL,
-		RefreshTTL:       cfg.RefreshTokenTTL,
-		BcryptCost:       cfg.BcryptCost,
-		MaxLoginAttempts: cfg.MaxLoginAttempts,
-		LockoutDuration:  cfg.LockoutDuration,
-	}, usuarioStore, refreshTokenStore, auditoriaStore)
-	usuarioService := service.NewUsuarioService(usuarioStore, rolStore, cfg.BcryptCost)
+		JWTSecret:           cfg.JWTSecret,
+		JWTIssuer:           cfg.JWTIssuer,
+		AccessTTL:           cfg.AccessTokenTTL,
+		RefreshTTL:          cfg.RefreshTokenTTL,
+		BcryptCost:          cfg.BcryptCost,
+		MaxLoginAttempts:    cfg.MaxLoginAttempts,
+		LockoutDuration:     cfg.LockoutDuration,
+		TermsVersion:        cfg.TermsVersion,
+		BootstrapAdminEmail: cfg.ClerkBootstrapAdminEmail,
+	}, usuarioStore, refreshTokenStore, auditoriaStore, authOpciones...)
+	usuarioService := service.NewUsuarioService(usuarioStore, rolStore)
 	cuentaService := service.NewCuentaService(service.CuentaConfig{
 		TermsVersion:    cfg.TermsVersion,
 		MinEdadCuenta:   cfg.MinEdadCuenta,
@@ -210,7 +222,7 @@ func main() {
 		VerificationTTL: cfg.EmailVerificationTTL,
 		ResetTTL:        cfg.PasswordResetTTL,
 		LinkBaseURL:     cfg.EmailLinkBaseURL,
-	}, cuentaStore, pacienteStore, usuarioStore, emailSender, auditoriaStore, logger)
+	}, cuentaStore, pacienteStore, usuarioStore, emailSender, auditoriaStore, logger, especialidadStore)
 	auditoriaService := service.NewAuditoriaService(auditoriaStore)
 	errorService := service.NewErrorService(errorStore, cfg.ServiceName, cfg.InstanceID, logger)
 	retentionService := service.NewRetentionService(

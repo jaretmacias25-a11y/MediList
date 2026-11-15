@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"medilist/internal/auth"
 	"medilist/internal/observability"
 	"medilist/internal/service/entities"
 )
@@ -54,6 +55,19 @@ type RegistroPacienteInput struct {
 	VersionTerminos string
 }
 
+// CompletarRegistroPacienteInput contiene los datos clínicos que faltan en
+// una cuenta creada con Clerk.
+type CompletarRegistroPacienteInput struct {
+	Nombres         string
+	Apellidos       string
+	TipoDocumento   string
+	NumeroDocumento string
+	FechaNacimiento time.Time
+	Sexo            string
+	Telefono        string
+	Direccion       string
+}
+
 // RegistroPacienteResultado indica si se creó un paciente nuevo o una cuenta
 // pendiente de vinculación con una historia clínica existente.
 type RegistroPacienteResultado struct {
@@ -66,13 +80,14 @@ type RegistroPacienteResultado struct {
 // CuentaService contiene los casos de uso de registro, verificación,
 // recuperación y vinculación de cuentas.
 type CuentaService struct {
-	cfg       CuentaConfig
-	cuentas   CuentaStore
-	pacientes PacienteStore
-	usuarios  UsuarioStore
-	email     EmailSender
-	auditoria AuditoriaStore
-	logger    *slog.Logger
+	cfg            CuentaConfig
+	cuentas        CuentaStore
+	pacientes      PacienteStore
+	usuarios       UsuarioStore
+	email          EmailSender
+	especialidades EspecialidadStore
+	auditoria      AuditoriaStore
+	logger         *slog.Logger
 }
 
 // NewCuentaService construye el servicio de cuentas.
@@ -84,6 +99,7 @@ func NewCuentaService(
 	email EmailSender,
 	auditoria AuditoriaStore,
 	logger *slog.Logger,
+	especialidades ...EspecialidadStore,
 ) *CuentaService {
 	if cfg.TermsVersion == "" {
 		cfg.TermsVersion = "2026-10"
@@ -106,14 +122,19 @@ func NewCuentaService(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	var especialidadStore EspecialidadStore
+	if len(especialidades) > 0 {
+		especialidadStore = especialidades[0]
+	}
 	return &CuentaService{
-		cfg:       cfg,
-		cuentas:   cuentas,
-		pacientes: pacientes,
-		usuarios:  usuarios,
-		email:     email,
-		auditoria: auditoria,
-		logger:    logger,
+		cfg:            cfg,
+		cuentas:        cuentas,
+		pacientes:      pacientes,
+		usuarios:       usuarios,
+		email:          email,
+		especialidades: especialidadStore,
+		auditoria:      auditoria,
+		logger:         logger,
 	}
 }
 
@@ -183,6 +204,307 @@ func (s *CuentaService) RegistrarPaciente(
 	default:
 		return nil, err
 	}
+}
+
+// CompletarRegistroPaciente permite que una cuenta autenticada sin historia
+// clínica (por ejemplo, creada con Clerk) complete sus datos demográficos.
+// Si el documento ya existe sin cuenta, se crea una solicitud de vinculación.
+func (s *CuentaService) CompletarRegistroPaciente(
+	ctx context.Context,
+	usuarioID int64,
+	in CompletarRegistroPacienteInput,
+	ip, userAgent string,
+) (*RegistroPacienteResultado, error) {
+	usuario, err := s.usuarios.ObtenerPorID(ctx, usuarioID)
+	if err != nil {
+		return nil, err
+	}
+	if !usuario.Activo {
+		return nil, fmt.Errorf("%w: la cuenta está inactiva", entities.ErrForbidden)
+	}
+	if !esCuentaPaciente(usuario) {
+		return nil, fmt.Errorf("%w: solo las cuentas de paciente pueden completar este registro", entities.ErrForbidden)
+	}
+
+	paciente, err := s.validarPacienteCompletar(in, usuario.Email)
+	if err != nil {
+		s.auditar(ctx, usuario, usuario.Username, "completar_registro_fallido", ip, userAgent, estadoAuditoriaErrorCuenta(err))
+		return nil, err
+	}
+
+	auditoria := s.auditoriaCuenta(
+		"cuentas", "completar_registro", "POST",
+		"/api/v1/portal/cuenta/completar-registro", ip, userAgent, auditStatusCreated,
+	)
+	creado, solicitud, err := s.cuentas.CompletarRegistroPaciente(
+		ctx, usuario, paciente, "Registro completado desde una cuenta de Clerk", auditoria,
+	)
+	if err != nil {
+		s.auditar(ctx, usuario, usuario.Username, "completar_registro_fallido", ip, userAgent, estadoAuditoriaErrorCuenta(err))
+		return nil, err
+	}
+	if solicitud != nil {
+		auditoria.EstadoHTTP = auditStatusAccepted
+		return &RegistroPacienteResultado{
+			Usuario:              usuario,
+			Solicitud:            solicitud,
+			VinculacionPendiente: true,
+		}, nil
+	}
+	return &RegistroPacienteResultado{Usuario: usuario, Paciente: creado}, nil
+}
+
+// ConvertirPacienteMedicoInput contiene los datos profesionales para convertir
+// una cuenta de paciente en médico reutilizando su persona.
+type ConvertirPacienteMedicoInput struct {
+	EspecialidadID  int64
+	NumeroLicencia  string
+	TipoProfesional string
+	DuracionCitaMin *int
+	Bio             *string
+	FotoURL         *string
+	AceptaPortal    *bool
+}
+
+func (s *CuentaService) ConvertirPacienteEnMedico(
+	ctx context.Context,
+	usuarioID int64,
+	in ConvertirPacienteMedicoInput,
+	actorID int64,
+	actorUsername, ip, userAgent string,
+) (*entities.Medico, error) {
+	if usuarioID <= 0 {
+		return nil, entities.NewValidationError("usuario_id es obligatorio")
+	}
+	if s.especialidades == nil {
+		return nil, fmt.Errorf("no está disponible el catálogo de especialidades")
+	}
+	especialidad, err := s.especialidades.ObtenerPorID(ctx, in.EspecialidadID)
+	if err != nil {
+		if errors.Is(err, entities.ErrNotFound) {
+			return nil, entities.NewValidationError("la especialidad %d no existe", in.EspecialidadID)
+		}
+		return nil, err
+	}
+	paciente, err := s.pacientes.BuscarPorUsuarioID(ctx, usuarioID)
+	if err != nil {
+		if errors.Is(err, entities.ErrNotFound) {
+			return nil, entities.NewValidationError(
+				"el usuario no tiene una historia clínica de paciente activa")
+		}
+		return nil, err
+	}
+
+	medico := &entities.Medico{
+		UsuarioID:       &usuarioID,
+		Persona:         paciente.Persona,
+		EspecialidadID:  in.EspecialidadID,
+		Especialidad:    *especialidad,
+		NumeroLicencia:  in.NumeroLicencia,
+		TipoProfesional: in.TipoProfesional,
+		DuracionCitaMin: 30,
+		AceptaPortal:    true,
+		Activo:          true,
+	}
+	if in.DuracionCitaMin != nil {
+		medico.DuracionCitaMin = *in.DuracionCitaMin
+	}
+	if in.Bio != nil {
+		medico.Bio = *in.Bio
+	}
+	if in.FotoURL != nil {
+		medico.FotoURL = *in.FotoURL
+	}
+	if in.AceptaPortal != nil {
+		medico.AceptaPortal = *in.AceptaPortal
+	}
+	normalizarMedico(medico)
+	if err := validarMedico(*medico); err != nil {
+		return nil, err
+	}
+
+	auditoria := s.auditoriaCuenta(
+		"cuentas", "convertir_medico", "POST",
+		"/api/v1/cuentas/convertir-paciente-medico", ip, userAgent, auditStatusOK,
+	)
+	auditoria.UsuarioID = &actorID
+	auditoria.Username = usernameAuditoria(actorUsername)
+	creado, err := s.cuentas.ConvertirPacienteEnMedico(
+		ctx, usuarioID, medico, "medico", auditoria,
+	)
+	if err != nil {
+		s.auditarActor(ctx, actorID, actorUsername, "convertir_medico_fallido",
+			"/api/v1/cuentas/convertir-paciente-medico", ip, userAgent,
+			estadoAuditoriaErrorCuenta(err))
+		return nil, err
+	}
+	return creado, nil
+}
+
+// CompletarRegistroClerk crea la cuenta local solo después de que el usuario
+// autenticado con Clerk completa sus datos clínicos. Si ya existe una cuenta
+// local sin historia clínica, completa esa cuenta en lugar de duplicarla.
+func (s *CuentaService) CompletarRegistroClerk(
+	ctx context.Context,
+	identidad *auth.IdentidadClerk,
+	in CompletarRegistroPacienteInput,
+	ip, userAgent string,
+) (*RegistroPacienteResultado, error) {
+	if identidad == nil || strings.TrimSpace(identidad.Subject) == "" {
+		return nil, entities.NewValidationError("la identidad de Clerk es obligatoria")
+	}
+	email := strings.ToLower(strings.TrimSpace(identidad.Email))
+	if email == "" {
+		return nil, entities.NewValidationError("la cuenta de Clerk no tiene correo verificado")
+	}
+
+	usuario, err := s.usuarios.BuscarPorClerkID(ctx, identidad.Subject)
+	if err != nil && !errors.Is(err, entities.ErrNotFound) {
+		return nil, err
+	}
+	if errors.Is(err, entities.ErrNotFound) {
+		usuario, err = s.usuarios.BuscarPorEmail(ctx, email)
+		if err != nil && !errors.Is(err, entities.ErrNotFound) {
+			return nil, err
+		}
+	}
+
+	paciente, err := s.validarPacienteCompletar(in, email)
+	if err != nil {
+		s.auditar(ctx, usuario, email, "registro_clerk_fallido", ip, userAgent, estadoAuditoriaErrorCuenta(err))
+		return nil, err
+	}
+
+	auditoria := s.auditoriaCuenta(
+		"auth", "registro_clerk", "POST",
+		"/api/v1/auth/clerk/registro", ip, userAgent, auditStatusCreated,
+	)
+
+	if usuario != nil {
+		if !usuario.Activo {
+			return nil, fmt.Errorf("%w: la cuenta está inactiva", entities.ErrForbidden)
+		}
+		if !esCuentaPaciente(usuario) {
+			return nil, fmt.Errorf("%w: solo las cuentas de paciente pueden completar este registro", entities.ErrForbidden)
+		}
+		if _, err := s.pacientes.BuscarPorUsuarioID(ctx, usuario.ID); err == nil {
+			return nil, fmt.Errorf("%w: la cuenta ya tiene una historia clínica vinculada", entities.ErrConflict)
+		} else if !errors.Is(err, entities.ErrNotFound) {
+			return nil, err
+		}
+		if usuario.ClerkUserID == "" {
+			if err := s.usuarios.VincularClerkID(ctx, usuario.ID, identidad.Subject); err != nil {
+				return nil, err
+			}
+		}
+		if usuario.EmailVerificadoEn == nil {
+			if err := s.usuarios.MarcarEmailVerificado(ctx, usuario.ID, time.Now()); err != nil {
+				return nil, err
+			}
+		}
+
+		creado, solicitud, err := s.cuentas.CompletarRegistroPaciente(
+			ctx, usuario, paciente, "Registro completado con Clerk", auditoria,
+		)
+		if err != nil {
+			s.auditar(ctx, usuario, usuario.Username, "registro_clerk_fallido", ip, userAgent, estadoAuditoriaErrorCuenta(err))
+			return nil, err
+		}
+		if solicitud != nil {
+			return &RegistroPacienteResultado{
+				Usuario:              usuario,
+				Solicitud:            solicitud,
+				VinculacionPendiente: true,
+			}, nil
+		}
+		return &RegistroPacienteResultado{Usuario: usuario, Paciente: creado}, nil
+	}
+
+	nombres := strings.TrimSpace(in.Nombres)
+	apellidos := strings.TrimSpace(in.Apellidos)
+	username := usernameDesdeEmail(email)
+	for intento := 2; ; intento++ {
+		_, err := s.usuarios.BuscarPorUsername(ctx, username)
+		if errors.Is(err, entities.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		username = fmt.Sprintf("%s-%d", usernameDesdeEmail(email), intento)
+	}
+
+	ahora := time.Now()
+	usuario = &entities.Usuario{
+		Username:            username,
+		Email:               email,
+		ClerkUserID:         identidad.Subject,
+		Nombres:             nombres,
+		Apellidos:           apellidos,
+		Activo:              true,
+		EmailVerificadoEn:   &ahora,
+		TerminosAceptadosEn: &ahora,
+		VersionTerminos:     s.cfg.TermsVersion,
+		Roles:               []string{"paciente"},
+	}
+	creado, solicitud, err := s.cuentas.RegistrarCuentaClerk(
+		ctx, usuario, paciente, "Registro creado con Clerk", auditoria,
+	)
+	if err != nil {
+		s.auditar(ctx, nil, email, "registro_clerk_fallido", ip, userAgent, estadoAuditoriaErrorCuenta(err))
+		return nil, err
+	}
+	if solicitud != nil {
+		return &RegistroPacienteResultado{
+			Usuario:              usuario,
+			Solicitud:            solicitud,
+			VinculacionPendiente: true,
+		}, nil
+	}
+	return &RegistroPacienteResultado{Usuario: usuario, Paciente: creado}, nil
+}
+
+func (s *CuentaService) validarPacienteCompletar(
+	in CompletarRegistroPacienteInput,
+	email string,
+) (*entities.Paciente, error) {
+	nombres := strings.TrimSpace(in.Nombres)
+	apellidos := strings.TrimSpace(in.Apellidos)
+	if nombres == "" || apellidos == "" {
+		return nil, entities.NewValidationError("nombres y apellidos son obligatorios")
+	}
+	if len(nombres) > 120 || len(apellidos) > 120 {
+		return nil, entities.NewValidationError("nombres y apellidos no pueden superar los 120 caracteres")
+	}
+
+	paciente := &entities.Paciente{
+		Persona: entities.Persona{
+			TipoDocumento:   in.TipoDocumento,
+			NumeroDocumento: in.NumeroDocumento,
+			Nombres:         nombres,
+			Apellidos:       apellidos,
+			FechaNacimiento: in.FechaNacimiento,
+			Sexo:            in.Sexo,
+			Telefono:        in.Telefono,
+			Email:           email,
+			Direccion:       in.Direccion,
+		},
+		Activo: true,
+	}
+	normalizarPaciente(paciente)
+	if err := validarPaciente(*paciente); err != nil {
+		return nil, err
+	}
+	edad := edadEnAnios(paciente.Persona.FechaNacimiento, time.Now())
+	if edad > 120 {
+		return nil, entities.NewValidationError("la fecha de nacimiento no es válida")
+	}
+	if s.cfg.MinEdadCuenta > 0 && edad < s.cfg.MinEdadCuenta {
+		return nil, entities.NewValidationError(
+			"debes tener al menos %d años para crear una cuenta; los pacientes menores requieren un tutor o representante",
+			s.cfg.MinEdadCuenta)
+	}
+	return paciente, nil
 }
 
 // VerificarEmail consume un token de verificación de un solo uso.
@@ -617,6 +939,8 @@ func rutaAuditoriaCuenta(accion string) string {
 		return "/api/v1/auth/forgot-password"
 	case strings.HasPrefix(accion, "reset_password"):
 		return "/api/v1/auth/reset-password"
+	case strings.HasPrefix(accion, "completar_registro"):
+		return "/api/v1/portal/cuenta/completar-registro"
 	default:
 		return "/api/v1/cuentas"
 	}

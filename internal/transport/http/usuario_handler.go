@@ -43,7 +43,6 @@ func (h *UsuarioHandler) Crear(w http.ResponseWriter, r *http.Request) {
 		Email:     req.Email,
 		Nombres:   req.Nombres,
 		Apellidos: req.Apellidos,
-		Password:  req.Password,
 		Roles:     req.Roles,
 	})
 	if err != nil {
@@ -89,7 +88,6 @@ func (h *UsuarioHandler) Actualizar(w http.ResponseWriter, r *http.Request) {
 		Apellidos: req.Apellidos,
 		Activo:    req.Activo,
 		Roles:     req.Roles,
-		Password:  req.Password,
 		Version:   req.Version,
 	}, claims.UsuarioID)
 	if err != nil {

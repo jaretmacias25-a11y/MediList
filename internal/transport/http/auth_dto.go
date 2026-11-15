@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"strings"
 	"time"
 
 	"medilist/internal/service"
@@ -18,6 +19,51 @@ type loginRequest struct {
 
 type refreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token"`
+}
+
+type clerkLoginRequest struct {
+	Token string `json:"token"`
+}
+
+type clerkPendienteResponse struct {
+	RegistroPendiente bool   `json:"registro_pendiente"`
+	Email             string `json:"email"`
+	Nombres           string `json:"nombres"`
+	Apellidos         string `json:"apellidos"`
+}
+
+type clerkRegistroRequest struct {
+	Token           string `json:"token"`
+	Nombres         string `json:"nombres"`
+	Apellidos       string `json:"apellidos"`
+	TipoDocumento   string `json:"tipo_documento"`
+	NumeroDocumento string `json:"numero_documento"`
+	FechaNacimiento string `json:"fecha_nacimiento"`
+	Sexo            string `json:"sexo"`
+	Telefono        string `json:"telefono"`
+	Direccion       string `json:"direccion"`
+}
+
+func (r clerkRegistroRequest) toInput() (service.CompletarRegistroPacienteInput, error) {
+	var fecha time.Time
+	if texto := strings.TrimSpace(r.FechaNacimiento); texto != "" {
+		parsed, err := time.Parse("2006-01-02", texto)
+		if err != nil {
+			return service.CompletarRegistroPacienteInput{}, entities.NewValidationError(
+				"fecha_nacimiento debe tener formato YYYY-MM-DD")
+		}
+		fecha = parsed
+	}
+	return service.CompletarRegistroPacienteInput{
+		Nombres:         r.Nombres,
+		Apellidos:       r.Apellidos,
+		TipoDocumento:   r.TipoDocumento,
+		NumeroDocumento: r.NumeroDocumento,
+		FechaNacimiento: fecha,
+		Sexo:            r.Sexo,
+		Telefono:        r.Telefono,
+		Direccion:       r.Direccion,
+	}, nil
 }
 
 type cambiarPasswordRequest struct {
@@ -61,7 +107,6 @@ type usuarioResponse struct {
 	EmailVerificadoEn   *time.Time `json:"email_verificado_en,omitempty"`
 	TerminosAceptadosEn *time.Time `json:"terminos_aceptados_en,omitempty"`
 	VersionTerminos     string     `json:"version_terminos,omitempty"`
-	DebeCambiarPassword bool       `json:"debe_cambiar_password"`
 	Roles               []string   `json:"roles"`
 	Permisos            []string   `json:"permisos"`
 	Version             int64      `json:"version"`
@@ -73,8 +118,9 @@ type usuarioResponse struct {
 // IDs son de solo lectura: el cliente no puede enviarlos para elegir dueño.
 type meResponse struct {
 	usuarioResponse
-	PacienteID *int64 `json:"paciente_id,omitempty"`
-	MedicoID   *int64 `json:"medico_id,omitempty"`
+	PacienteID                *int64 `json:"paciente_id,omitempty"`
+	MedicoID                  *int64 `json:"medico_id,omitempty"`
+	RequiereCompletarRegistro bool   `json:"requiere_completar_registro"`
 }
 
 func nuevoMeResponse(u entities.Usuario, actor *service.Actor) meResponse {
@@ -82,8 +128,23 @@ func nuevoMeResponse(u entities.Usuario, actor *service.Actor) meResponse {
 	if actor != nil {
 		resp.PacienteID = actor.PacienteID
 		resp.MedicoID = actor.MedicoID
+		if u.ClerkUserID != "" && actor.PacienteID == nil && !actor.SolicitudPendiente && soloRolPaciente(u.Roles) {
+			resp.RequiereCompletarRegistro = true
+		}
 	}
 	return resp
+}
+
+func soloRolPaciente(roles []string) bool {
+	if len(roles) == 0 {
+		return false
+	}
+	for _, rol := range roles {
+		if rol != "paciente" {
+			return false
+		}
+	}
+	return true
 }
 
 func nuevoUsuarioResponse(u entities.Usuario) usuarioResponse {
@@ -109,7 +170,6 @@ func nuevoUsuarioResponse(u entities.Usuario) usuarioResponse {
 		EmailVerificadoEn:   u.EmailVerificadoEn,
 		TerminosAceptadosEn: u.TerminosAceptadosEn,
 		VersionTerminos:     u.VersionTerminos,
-		DebeCambiarPassword: u.DebeCambiarPassword,
 		Roles:               roles,
 		Permisos:            permisos,
 		Version:             u.Version,
@@ -123,7 +183,6 @@ type crearUsuarioRequest struct {
 	Email     string   `json:"email"`
 	Nombres   string   `json:"nombres"`
 	Apellidos string   `json:"apellidos"`
-	Password  string   `json:"password"`
 	Roles     []string `json:"roles"`
 }
 
@@ -133,7 +192,6 @@ type actualizarUsuarioRequest struct {
 	Apellidos string   `json:"apellidos"`
 	Activo    *bool    `json:"activo"`
 	Roles     []string `json:"roles"`
-	Password  *string  `json:"password"`
 	Version   int64    `json:"version"`
 }
 

@@ -25,16 +25,20 @@ func NewCuentaStore(db *pgxpool.Pool) *CuentaStore {
 
 const insertarUsuarioCuentaSQL = `
 	INSERT INTO usuarios (
-		username, email, password_hash, nombres, apellidos, activo,
+		username, email, password_hash, clerk_user_id, nombres, apellidos, activo,
 		email_verificado_en, terminos_aceptados_en, version_terminos,
 		debe_cambiar_password
 	)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	RETURNING id, version, created_at, updated_at`
 
 func insertarUsuarioCuenta(ctx context.Context, tx pgx.Tx, u *entities.Usuario) error {
+	var clerkID pgtype.Text
+	if u.ClerkUserID != "" {
+		clerkID = pgtype.Text{String: u.ClerkUserID, Valid: true}
+	}
 	err := tx.QueryRow(ctx, insertarUsuarioCuentaSQL,
-		u.Username, u.Email, u.PasswordHash, u.Nombres, u.Apellidos, u.Activo,
+		u.Username, u.Email, u.PasswordHash, clerkID, u.Nombres, u.Apellidos, u.Activo,
 		u.EmailVerificadoEn, u.TerminosAceptadosEn, u.VersionTerminos,
 		u.DebeCambiarPassword,
 	).Scan(&u.ID, &u.Version, &u.CreatedAt, &u.UpdatedAt)
@@ -222,6 +226,395 @@ func (s *CuentaStore) RegistrarCuentaPendienteVinculacion(
 		return err
 	}
 	return mapError(tx.Commit(ctx))
+}
+
+// CompletarRegistroPaciente crea la historia clínica de una cuenta ya
+// autenticada (por ejemplo, creada con Clerk) o registra una solicitud de
+// vinculación si el documento ya pertenece a una historia sin cuenta.
+func (s *CuentaStore) CompletarRegistroPaciente(
+	ctx context.Context,
+	usuario *entities.Usuario,
+	paciente *entities.Paciente,
+	motivo string,
+	auditoria *entities.Auditoria,
+) (*entities.Paciente, *entities.SolicitudVinculacion, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, nil, mapError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var yaVinculado bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pacientes WHERE usuario_id = $1
+		)`, usuario.ID).Scan(&yaVinculado); err != nil {
+		return nil, nil, mapError(err)
+	}
+	if yaVinculado {
+		return nil, nil, fmt.Errorf("%w: la cuenta ya tiene una historia clínica vinculada", entities.ErrConflict)
+	}
+
+	var pacienteID int64
+	var usuarioVinculado pgtype.Int8
+	err = tx.QueryRow(ctx, `
+		SELECT p.id, p.usuario_id
+		FROM pacientes p
+		JOIN personas pe ON pe.id = p.persona_id
+		WHERE UPPER(pe.tipo_documento) = UPPER($1)
+		  AND pe.numero_documento = $2
+		FOR UPDATE`,
+		paciente.Persona.TipoDocumento, paciente.Persona.NumeroDocumento,
+	).Scan(&pacienteID, &usuarioVinculado)
+
+	switch {
+	case err == nil:
+		if usuarioVinculado.Valid {
+			return nil, nil, fmt.Errorf("%w: el documento ya tiene una cuenta vinculada", entities.ErrConflict)
+		}
+
+		var existePendiente bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM solicitudes_vinculacion
+				WHERE paciente_id = $1 AND estado = 'pendiente'
+			)`, pacienteID).Scan(&existePendiente); err != nil {
+			return nil, nil, mapError(err)
+		}
+		if existePendiente {
+			return nil, nil, fmt.Errorf("%w: ya existe una solicitud de vinculación pendiente para esta historia clínica", entities.ErrConflict)
+		}
+
+		if motivo == "" {
+			motivo = "Solicitud creada al completar el registro de la cuenta"
+		}
+		solicitud := &entities.SolicitudVinculacion{
+			UsuarioID:       usuario.ID,
+			Username:        usuario.Username,
+			Email:           usuario.Email,
+			PacienteID:      pacienteID,
+			Estado:          entities.SolicitudVinculacionPendiente,
+			Motivo:          motivo,
+			Nombres:         usuario.Nombres,
+			Apellidos:       usuario.Apellidos,
+			TipoDocumento:   paciente.Persona.TipoDocumento,
+			NumeroDocumento: paciente.Persona.NumeroDocumento,
+		}
+		const insertSolicitud = `
+			INSERT INTO solicitudes_vinculacion
+				(usuario_id, paciente_id, estado, motivo)
+			VALUES ($1, $2, $3, $4)
+			RETURNING id, created_at, updated_at`
+		if err := tx.QueryRow(ctx, insertSolicitud,
+			solicitud.UsuarioID, solicitud.PacienteID, string(solicitud.Estado), solicitud.Motivo,
+		).Scan(&solicitud.ID, &solicitud.CreatedAt, &solicitud.UpdatedAt); err != nil {
+			return nil, nil, mapError(err)
+		}
+		if auditoria != nil {
+			auditoria.UsuarioID = &usuario.ID
+			auditoria.Username = usuario.Username
+		}
+		if err := insertarAuditoriaCuenta(ctx, tx, auditoria); err != nil {
+			return nil, nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, nil, mapError(err)
+		}
+		return nil, solicitud, nil
+
+	case errors.Is(err, pgx.ErrNoRows):
+		const insertPersona = `
+			INSERT INTO personas
+				(tipo_documento, numero_documento, nombres, apellidos,
+				 fecha_nacimiento, sexo, telefono, email, direccion)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			RETURNING id`
+		if err := tx.QueryRow(ctx, insertPersona,
+			paciente.Persona.TipoDocumento, paciente.Persona.NumeroDocumento,
+			paciente.Persona.Nombres, paciente.Persona.Apellidos,
+			paciente.Persona.FechaNacimiento, paciente.Persona.Sexo,
+			paciente.Persona.Telefono, paciente.Persona.Email, paciente.Persona.Direccion,
+		).Scan(&paciente.Persona.ID); err != nil {
+			return nil, nil, mapError(err)
+		}
+
+		paciente.UsuarioID = &usuario.ID
+		const insertPaciente = `
+			INSERT INTO pacientes
+				(persona_id, usuario_id, grupo_sanguineo, factor_rh,
+				 contacto_emergencia_nombre, contacto_emergencia_telefono, activo)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING id, numero_historia, version, created_at, updated_at`
+		if err := tx.QueryRow(ctx, insertPaciente,
+			paciente.Persona.ID, paciente.UsuarioID, paciente.GrupoSanguineo, paciente.FactorRH,
+			paciente.ContactoEmergenciaNombre, paciente.ContactoEmergenciaTelefono, paciente.Activo,
+		).Scan(&paciente.ID, &paciente.NumeroHistoria, &paciente.Version,
+			&paciente.CreatedAt, &paciente.UpdatedAt); err != nil {
+			return nil, nil, mapError(err)
+		}
+
+		if auditoria != nil {
+			auditoria.UsuarioID = &usuario.ID
+			auditoria.Username = usuario.Username
+		}
+		if err := insertarAuditoriaCuenta(ctx, tx, auditoria); err != nil {
+			return nil, nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, nil, mapError(err)
+		}
+		return paciente, nil, nil
+
+	default:
+		return nil, nil, mapError(err)
+	}
+}
+
+// RegistrarCuentaClerk crea la cuenta local y la historia clínica (o la
+// solicitud de vinculación) en una sola transacción, después de que Clerk
+// verificó el correo. No se crea ninguna cuenta antes de este paso.
+func (s *CuentaStore) RegistrarCuentaClerk(
+	ctx context.Context,
+	usuario *entities.Usuario,
+	paciente *entities.Paciente,
+	motivo string,
+	auditoria *entities.Auditoria,
+) (*entities.Paciente, *entities.SolicitudVinculacion, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, nil, mapError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var existeCuenta bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM usuarios
+			WHERE LOWER(email) = LOWER($1) OR username = $2
+		)`, usuario.Email, usuario.Username).Scan(&existeCuenta); err != nil {
+		return nil, nil, mapError(err)
+	}
+	if existeCuenta {
+		return nil, nil, fmt.Errorf("%w: ya existe una cuenta con ese correo o usuario", entities.ErrConflict)
+	}
+
+	var pacienteID int64
+	var usuarioVinculado pgtype.Int8
+	err = tx.QueryRow(ctx, `
+		SELECT p.id, p.usuario_id
+		FROM pacientes p
+		JOIN personas pe ON pe.id = p.persona_id
+		WHERE UPPER(pe.tipo_documento) = UPPER($1)
+		  AND pe.numero_documento = $2
+		FOR UPDATE`,
+		paciente.Persona.TipoDocumento, paciente.Persona.NumeroDocumento,
+	).Scan(&pacienteID, &usuarioVinculado)
+
+	switch {
+	case err == nil:
+		if usuarioVinculado.Valid {
+			return nil, nil, fmt.Errorf("%w: el documento ya tiene una cuenta vinculada", entities.ErrConflict)
+		}
+		var existePendiente bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM solicitudes_vinculacion
+				WHERE paciente_id = $1 AND estado = 'pendiente'
+			)`, pacienteID).Scan(&existePendiente); err != nil {
+			return nil, nil, mapError(err)
+		}
+		if existePendiente {
+			return nil, nil, fmt.Errorf("%w: ya existe una solicitud de vinculación pendiente para esta historia clínica", entities.ErrConflict)
+		}
+
+		if err := insertarUsuarioCuenta(ctx, tx, usuario); err != nil {
+			return nil, nil, err
+		}
+		if motivo == "" {
+			motivo = "Solicitud creada al completar el registro con Clerk"
+		}
+		solicitud := &entities.SolicitudVinculacion{
+			UsuarioID:       usuario.ID,
+			Username:        usuario.Username,
+			Email:           usuario.Email,
+			PacienteID:      pacienteID,
+			Estado:          entities.SolicitudVinculacionPendiente,
+			Motivo:          motivo,
+			Nombres:         usuario.Nombres,
+			Apellidos:       usuario.Apellidos,
+			TipoDocumento:   paciente.Persona.TipoDocumento,
+			NumeroDocumento: paciente.Persona.NumeroDocumento,
+		}
+		const insertSolicitud = `
+			INSERT INTO solicitudes_vinculacion
+				(usuario_id, paciente_id, estado, motivo)
+			VALUES ($1, $2, $3, $4)
+			RETURNING id, created_at, updated_at`
+		if err := tx.QueryRow(ctx, insertSolicitud,
+			solicitud.UsuarioID, solicitud.PacienteID, string(solicitud.Estado), solicitud.Motivo,
+		).Scan(&solicitud.ID, &solicitud.CreatedAt, &solicitud.UpdatedAt); err != nil {
+			return nil, nil, mapError(err)
+		}
+		if auditoria != nil {
+			auditoria.UsuarioID = &usuario.ID
+			auditoria.Username = usuario.Username
+		}
+		if err := insertarAuditoriaCuenta(ctx, tx, auditoria); err != nil {
+			return nil, nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, nil, mapError(err)
+		}
+		return nil, solicitud, nil
+
+	case errors.Is(err, pgx.ErrNoRows):
+		const insertPersona = `
+			INSERT INTO personas
+				(tipo_documento, numero_documento, nombres, apellidos,
+				 fecha_nacimiento, sexo, telefono, email, direccion)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			RETURNING id`
+		if err := tx.QueryRow(ctx, insertPersona,
+			paciente.Persona.TipoDocumento, paciente.Persona.NumeroDocumento,
+			paciente.Persona.Nombres, paciente.Persona.Apellidos,
+			paciente.Persona.FechaNacimiento, paciente.Persona.Sexo,
+			paciente.Persona.Telefono, paciente.Persona.Email, paciente.Persona.Direccion,
+		).Scan(&paciente.Persona.ID); err != nil {
+			return nil, nil, mapError(err)
+		}
+
+		if err := insertarUsuarioCuenta(ctx, tx, usuario); err != nil {
+			return nil, nil, err
+		}
+
+		paciente.UsuarioID = &usuario.ID
+		const insertPaciente = `
+			INSERT INTO pacientes
+				(persona_id, usuario_id, grupo_sanguineo, factor_rh,
+				 contacto_emergencia_nombre, contacto_emergencia_telefono, activo)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING id, numero_historia, version, created_at, updated_at`
+		if err := tx.QueryRow(ctx, insertPaciente,
+			paciente.Persona.ID, paciente.UsuarioID, paciente.GrupoSanguineo, paciente.FactorRH,
+			paciente.ContactoEmergenciaNombre, paciente.ContactoEmergenciaTelefono, paciente.Activo,
+		).Scan(&paciente.ID, &paciente.NumeroHistoria, &paciente.Version,
+			&paciente.CreatedAt, &paciente.UpdatedAt); err != nil {
+			return nil, nil, mapError(err)
+		}
+
+		if auditoria != nil {
+			auditoria.UsuarioID = &usuario.ID
+			auditoria.Username = usuario.Username
+		}
+		if err := insertarAuditoriaCuenta(ctx, tx, auditoria); err != nil {
+			return nil, nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, nil, mapError(err)
+		}
+		return paciente, nil, nil
+
+	default:
+		return nil, nil, mapError(err)
+	}
+}
+
+// ConvertirPacienteEnMedico reutiliza la persona del paciente para crear su
+// perfil de médico, vincula la cuenta y reemplaza sus roles por el rol médico.
+func (s *CuentaStore) ConvertirPacienteEnMedico(
+	ctx context.Context,
+	usuarioID int64,
+	medico *entities.Medico,
+	rol string,
+	auditoria *entities.Auditoria,
+) (*entities.Medico, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var personaID int64
+	err = tx.QueryRow(ctx, `
+		SELECT persona_id
+		FROM pacientes
+		WHERE usuario_id = $1 AND activo
+		FOR UPDATE`, usuarioID).Scan(&personaID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, entities.NewValidationError(
+			"el usuario no tiene una historia clínica de paciente activa")
+	}
+	if err != nil {
+		return nil, mapError(err)
+	}
+
+	var yaEsMedico bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM medicos
+			WHERE usuario_id = $1 OR persona_id = $2
+		)`, usuarioID, personaID).Scan(&yaEsMedico); err != nil {
+		return nil, mapError(err)
+	}
+	if yaEsMedico {
+		return nil, fmt.Errorf("%w: el usuario o la persona ya tienen un perfil de médico", entities.ErrConflict)
+	}
+
+	medico.Persona.ID = personaID
+	medico.UsuarioID = &usuarioID
+	medico.Activo = true
+	const insertMedico = `
+		INSERT INTO medicos
+			(persona_id, usuario_id, especialidad_id, numero_licencia,
+			 tipo_profesional, duracion_cita_min, bio, foto_url, acepta_portal, activo)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, version, created_at, updated_at`
+	if err := tx.QueryRow(ctx, insertMedico,
+		medico.Persona.ID, medico.UsuarioID, medico.EspecialidadID, medico.NumeroLicencia,
+		medico.TipoProfesional, medico.DuracionCitaMin, medico.Bio, medico.FotoURL,
+		medico.AceptaPortal, medico.Activo,
+	).Scan(&medico.ID, &medico.Version, &medico.CreatedAt, &medico.UpdatedAt); err != nil {
+		return nil, mapError(err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE usuarios
+		SET token_version = token_version + 1,
+			version = version + 1
+		WHERE id = $1`, usuarioID); err != nil {
+		return nil, mapError(err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM usuario_roles WHERE usuario_id = $1`, usuarioID); err != nil {
+		return nil, mapError(err)
+	}
+	if rol == "" {
+		rol = "medico"
+	}
+	roles := []string{rol}
+	var esAdmin bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM usuario_roles ur
+			JOIN roles r ON r.id = ur.rol_id
+			WHERE ur.usuario_id = $1 AND r.codigo = 'admin'
+		)`, usuarioID).Scan(&esAdmin); err != nil {
+		return nil, mapError(err)
+	}
+	if esAdmin {
+		roles = append(roles, "admin")
+	}
+	if err := asignarRoles(ctx, tx, usuarioID, roles); err != nil {
+		return nil, err
+	}
+
+	if err := insertarAuditoriaCuenta(ctx, tx, auditoria); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, mapError(err)
+	}
+	return medico, nil
 }
 
 // ReemplazarToken invalida los tokens activos del mismo tipo y guarda uno

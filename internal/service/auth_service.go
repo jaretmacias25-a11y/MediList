@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"medilist/internal/auth"
 	"medilist/internal/observability"
 	"medilist/internal/service/entities"
 )
@@ -25,13 +26,20 @@ const (
 
 // AuthConfig agrupa los parámetros de seguridad de autenticación.
 type AuthConfig struct {
-	JWTSecret        string
-	JWTIssuer        string
-	AccessTTL        time.Duration
-	RefreshTTL       time.Duration
-	BcryptCost       int
-	MaxLoginAttempts int
-	LockoutDuration  time.Duration
+	JWTSecret           string
+	JWTIssuer           string
+	AccessTTL           time.Duration
+	RefreshTTL          time.Duration
+	BcryptCost          int
+	MaxLoginAttempts    int
+	LockoutDuration     time.Duration
+	TermsVersion        string
+	BootstrapAdminEmail string
+}
+
+// ClerkVerifier valida tokens de sesión externos (Clerk).
+type ClerkVerifier interface {
+	Verificar(ctx context.Context, token string) (*auth.IdentidadClerk, error)
 }
 
 // Sesion es el par de tokens devuelto al iniciar sesión o refrescar.
@@ -42,36 +50,67 @@ type Sesion struct {
 	Usuario      *entities.Usuario
 }
 
-// AuthService contiene la lógica de autenticación y sesiones.
-type AuthService struct {
-	usuarios    UsuarioStore
-	refresh     RefreshTokenStore
-	auditoria   AuditoriaStore
-	tokens      *TokenManager
-	bcryptCost  int
-	accessTTL   time.Duration
-	refreshTTL  time.Duration
-	maxIntentos int
-	bloqueo     time.Duration
+// RegistroClerkPendiente contiene los datos que la SPA puede mostrar cuando
+// Clerk autenticó al usuario pero todavía no existe una cuenta local.
+type RegistroClerkPendiente struct {
+	Email     string
+	Nombres   string
+	Apellidos string
 }
 
-// NewAuthService construye el servicio de autenticación.
+// ResultadoLoginClerk indica si se emitió una sesión o si el usuario debe
+// completar sus datos antes de crear la cuenta local.
+type ResultadoLoginClerk struct {
+	Sesion    *Sesion
+	Pendiente *RegistroClerkPendiente
+}
+
+// AuthService contiene la lógica de autenticación y sesiones.
+type AuthService struct {
+	usuarios            UsuarioStore
+	refresh             RefreshTokenStore
+	auditoria           AuditoriaStore
+	tokens              *TokenManager
+	clerk               ClerkVerifier
+	termsVersion        string
+	bootstrapAdminEmail string
+	bcryptCost          int
+	accessTTL           time.Duration
+	refreshTTL          time.Duration
+	maxIntentos         int
+	bloqueo             time.Duration
+}
+
+// NewAuthService construye el servicio de autenticación. El verificador de
+// Clerk es opcional: sin él, el inicio con Clerk devuelve 403.
 func NewAuthService(
 	cfg AuthConfig,
 	usuarios UsuarioStore,
 	refresh RefreshTokenStore,
 	auditoria AuditoriaStore,
+	clerk ...ClerkVerifier,
 ) *AuthService {
+	termsVersion := strings.TrimSpace(cfg.TermsVersion)
+	if termsVersion == "" {
+		termsVersion = "2026-10"
+	}
+	var clerkVerifier ClerkVerifier
+	if len(clerk) > 0 {
+		clerkVerifier = clerk[0]
+	}
 	return &AuthService{
-		usuarios:    usuarios,
-		refresh:     refresh,
-		auditoria:   auditoria,
-		tokens:      NewTokenManager(cfg.JWTSecret, cfg.JWTIssuer, cfg.AccessTTL),
-		bcryptCost:  cfg.BcryptCost,
-		accessTTL:   cfg.AccessTTL,
-		refreshTTL:  cfg.RefreshTTL,
-		maxIntentos: cfg.MaxLoginAttempts,
-		bloqueo:     cfg.LockoutDuration,
+		usuarios:            usuarios,
+		refresh:             refresh,
+		auditoria:           auditoria,
+		tokens:              NewTokenManager(cfg.JWTSecret, cfg.JWTIssuer, cfg.AccessTTL),
+		clerk:               clerkVerifier,
+		termsVersion:        termsVersion,
+		bootstrapAdminEmail: strings.ToLower(strings.TrimSpace(cfg.BootstrapAdminEmail)),
+		bcryptCost:          cfg.BcryptCost,
+		accessTTL:           cfg.AccessTTL,
+		refreshTTL:          cfg.RefreshTTL,
+		maxIntentos:         cfg.MaxLoginAttempts,
+		bloqueo:             cfg.LockoutDuration,
 	}
 }
 
@@ -153,6 +192,178 @@ func (s *AuthService) Login(ctx context.Context, username, password, ip, userAge
 	}
 	s.auditar(ctx, usuario, usuario.Username, "login", ip, userAgent, auditStatusOK)
 	return sesion, nil
+}
+
+// VerificarClerk valida un token de Clerk y devuelve la identidad externa.
+func (s *AuthService) VerificarClerk(ctx context.Context, token string) (*auth.IdentidadClerk, error) {
+	if s.clerk == nil {
+		return nil, fmt.Errorf("%w: el inicio con Clerk no está configurado", entities.ErrForbidden)
+	}
+	identidad, err := s.clerk.Verificar(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("%w: token de Clerk inválido", entities.ErrUnauthorized)
+	}
+	return identidad, nil
+}
+
+// LoginClerk valida un token de Clerk. Si la cuenta local ya existe, emite una
+// sesión; si no existe, devuelve los datos para que la SPA abra el formulario
+// de registro. La cuenta local se crea únicamente al completar ese formulario.
+func (s *AuthService) LoginClerk(ctx context.Context, token, ip, userAgent string) (*ResultadoLoginClerk, error) {
+	identidad, err := s.VerificarClerk(ctx, token)
+	if err != nil {
+		if errors.Is(err, entities.ErrUnauthorized) {
+			s.auditar(ctx, nil, "", "login_clerk_fallido", ip, userAgent, auditStatusUnauthorized)
+		}
+		return nil, err
+	}
+
+	usuario, err := s.usuarios.BuscarPorClerkID(ctx, identidad.Subject)
+	if err != nil && !errors.Is(err, entities.ErrNotFound) {
+		return nil, err
+	}
+	if errors.Is(err, entities.ErrNotFound) && identidad.Email != "" {
+		usuario, err = s.usuarios.BuscarPorEmail(ctx, identidad.Email)
+		if err != nil && !errors.Is(err, entities.ErrNotFound) {
+			return nil, err
+		}
+	}
+
+	if errors.Is(err, entities.ErrNotFound) || usuario == nil {
+		return &ResultadoLoginClerk{
+			Pendiente: &RegistroClerkPendiente{
+				Email:     strings.ToLower(strings.TrimSpace(identidad.Email)),
+				Nombres:   identidad.Nombres,
+				Apellidos: identidad.Apellidos,
+			},
+		}, nil
+	}
+
+	// Vincula la identidad de Clerk y marca el correo como verificado.
+	if usuario.ClerkUserID == "" {
+		if err := s.usuarios.VincularClerkID(ctx, usuario.ID, identidad.Subject); err != nil {
+			return nil, err
+		}
+	}
+	if usuario.EmailVerificadoEn == nil {
+		if err := s.usuarios.MarcarEmailVerificado(ctx, usuario.ID, time.Now()); err != nil {
+			return nil, err
+		}
+	}
+	usuario, err = s.usuarios.ObtenerPorID(ctx, usuario.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.bootstrapAdminEmail != "" && strings.EqualFold(usuario.Email, s.bootstrapAdminEmail) && !tieneRol(usuario.Roles, "admin") {
+		if err := s.usuarios.AsegurarRol(ctx, usuario.ID, "admin"); err != nil {
+			return nil, err
+		}
+		usuario, err = s.usuarios.ObtenerPorID(ctx, usuario.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if !usuario.Activo {
+		return nil, fmt.Errorf("%w: la cuenta está inactiva", entities.ErrForbidden)
+	}
+	if usuario.BloqueadoHasta != nil && usuario.BloqueadoHasta.After(time.Now()) {
+		return nil, fmt.Errorf("%w: cuenta bloqueada temporalmente", entities.ErrLocked)
+	}
+
+	sesion, err := s.crearSesion(ctx, usuario, ip, userAgent)
+	if err != nil {
+		return nil, err
+	}
+	s.auditar(ctx, usuario, usuario.Username, "login_clerk", ip, userAgent, auditStatusOK)
+	return &ResultadoLoginClerk{Sesion: sesion}, nil
+}
+
+func usernameDesdeEmail(email string) string {
+	local := strings.ToLower(strings.TrimSpace(strings.Split(email, "@")[0]))
+	var limpio strings.Builder
+	for _, r := range local {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			limpio.WriteRune(r)
+		}
+	}
+	base := strings.Trim(limpio.String(), "._-")
+	if len(base) < 3 {
+		base = "paciente"
+	}
+	if len(base) > 40 {
+		base = strings.TrimRight(base[:40], "._-")
+	}
+	return base
+}
+
+func tieneRol(roles []string, codigo string) bool {
+	for _, rol := range roles {
+		if rol == codigo {
+			return true
+		}
+	}
+	return false
+}
+
+func esCuentaPaciente(usuario *entities.Usuario) bool {
+	if usuario == nil || len(usuario.Roles) == 0 {
+		return false
+	}
+	for _, rol := range usuario.Roles {
+		if rol != "paciente" {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *AuthService) crearUsuarioClerk(ctx context.Context, identidad *auth.IdentidadClerk) (*entities.Usuario, error) {
+	nombres := identidad.Nombres
+	if nombres == "" {
+		nombres = "Paciente"
+	}
+	apellidos := identidad.Apellidos
+	if apellidos == "" {
+		apellidos = "Clerk"
+	}
+	email := strings.ToLower(strings.TrimSpace(identidad.Email))
+	if email == "" {
+		return nil, fmt.Errorf("%w: la cuenta de Clerk no tiene correo verificado", entities.ErrForbidden)
+	}
+
+	base := usernameDesdeEmail(email)
+	username := base
+	for intento := 2; ; intento++ {
+		_, err := s.usuarios.BuscarPorUsername(ctx, username)
+		if errors.Is(err, entities.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		username = fmt.Sprintf("%s-%d", base, intento)
+	}
+
+	ahora := time.Now()
+	usuario := &entities.Usuario{
+		Username:            username,
+		Email:               email,
+		PasswordHash:        "",
+		ClerkUserID:         identidad.Subject,
+		Nombres:             nombres,
+		Apellidos:           apellidos,
+		Activo:              true,
+		EmailVerificadoEn:   &ahora,
+		TerminosAceptadosEn: &ahora,
+		VersionTerminos:     s.termsVersion,
+		Roles:               []string{"paciente"},
+	}
+	if err := s.usuarios.Crear(ctx, usuario); err != nil {
+		return nil, err
+	}
+	return s.usuarios.ObtenerPorID(ctx, usuario.ID)
 }
 
 // Refresh rota el refresh token y emite un nuevo par de tokens.

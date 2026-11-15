@@ -10,14 +10,15 @@ import (
 // Los IDs de paciente y médico no se aceptan desde el cliente: se obtienen de
 // los vínculos de la cuenta en la base de datos.
 type Actor struct {
-	UsuarioID       int64
-	Username        string
-	Email           string
-	Roles           []string
-	Permisos        []string
-	PacienteID      *int64
-	MedicoID        *int64
-	EmailVerificado bool
+	UsuarioID          int64
+	Username           string
+	Email              string
+	Roles              []string
+	Permisos           []string
+	PacienteID         *int64
+	MedicoID           *int64
+	EmailVerificado    bool
+	SolicitudPendiente bool
 }
 
 // TieneRol indica si el actor posee un rol determinado.

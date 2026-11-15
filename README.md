@@ -2,7 +2,7 @@
 
 Backend en **Go** para la gestión de pacientes, médicos, especialidades y citas de una clínica. Implementa una **arquitectura limpia por capas** con persistencia en **PostgreSQL**, autenticación **JWT**, control de acceso basado en roles (**RBAC**), cuentas de paciente con verificación de email, vinculación con historias existentes y auditoría de seguridad.
 
-El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente, la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, la Fase 5 de agenda directa, la Fase 6 de flujo médico/derivaciones/transferencia interna, la Fase 7 de reserva de especialista con derivación, la Fase 8 de notificaciones (outbox transaccional, worker con reintentos/backoff, plantillas, recordatorios, preferencias y proveedor SMTP), la Fase 9 de endurecimiento (rate limiting distribuido, CORS, HSTS, métricas y runbook) y la Fase 10 de cierre local (feature flags, CI, E2E de staging local, revisión de dependencias y OpenAPI 1.0.0). El procedimiento operativo está en [docs/runbook.md](./docs/runbook.md).
+La especificación funcional para construir el frontend está en [docs/especificacion-frontend.md](./docs/especificacion-frontend.md). El modelo de dominio completo está documentado en [entidades.md](./entidades.md). Esta entrega implementa el núcleo de agenda, la infraestructura de seguridad, la Fase 2 de cuentas de paciente, la Fase 3 de autorización por actor, la Fase 4 de catálogo, horarios y disponibilidad, la Fase 5 de agenda directa, la Fase 6 de flujo médico/derivaciones/transferencia interna, la Fase 7 de reserva de especialista con derivación, la Fase 8 de notificaciones (outbox transaccional, worker con reintentos/backoff, plantillas, recordatorios, preferencias y proveedor SMTP), la Fase 9 de endurecimiento (rate limiting distribuido, CORS, HSTS, métricas y runbook) y la Fase 10 de cierre local (feature flags, CI, E2E de staging local, revisión de dependencias y OpenAPI 1.0.0). El procedimiento operativo está en [docs/runbook.md](./docs/runbook.md).
 
 ---
 
@@ -38,6 +38,10 @@ La inversión de dependencias permite cambiar PostgreSQL por otro motor sin toca
 ```text
 MediList/
 ├── cmd/api/main.go                     # arranque y wiring
+├── frontend/                           # SPA React + Vite + Tailwind (esqueleto)
+│   ├── src/lib/http.ts                 # cliente HTTP con refresh automático
+│   ├── src/stores/auth.ts              # estado global de sesión (Zustand)
+│   └── src/router/                     # rutas y guardas por permisos
 ├── internal/
 │   ├── config/config.go                # .env y variables de entorno
 │   ├── observability/
@@ -108,6 +112,7 @@ MediList/
 │       └── *_handler.go                # endpoints
 ├── docs/
 │   ├── openapi.yaml                    # contrato OpenAPI hasta Fase 10 (1.0.0)
+│   ├── especificacion-frontend.md      # especificación funcional para construir el frontend
 │   └── runbook.md                      # TLS, backups, incidentes y carga
 ├── migrations/
 │   ├── 001_init.sql                    # tablas clínicas, índices y triggers
@@ -210,6 +215,9 @@ MediList/
    PASSWORD_RESET_MINUTES=60
    TERMS_VERSION=2026-10
    MIN_EDAD_CUENTA=18
+   # Opcional: identidad externa para pacientes (ver sección Clerk).
+   CLERK_SECRET_KEY=
+   CLERK_AUTHORIZED_PARTIES=http://localhost:5173,http://127.0.0.1:5173
 
    # Agenda y disponibilidad del portal.
    CLINIC_TIMEZONE=America/Guayaquil
@@ -232,7 +240,7 @@ MediList/
 
    # Endurecimiento HTTP (Fase 9).
    # Lista exacta de orígenes del frontend; vacío deshabilita CORS.
-   CORS_ALLOWED_ORIGINS=http://localhost:3000
+   CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
    # Solo si la API está detrás de un proxy inverso de confianza.
    # TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
    HSTS_ENABLED=false
@@ -290,6 +298,8 @@ MediList/
 
    El correo de desarrollo se escribe en `outbox/emails/*.eml`; el token no aparece en logs. Para producción configura `EMAIL_PROVIDER=smtp` y las variables `SMTP_*`; el proveedor SMTP usa STARTTLS cuando el servidor lo ofrece. El worker del outbox es independiente del proveedor y reintenta los fallos con backoff.
 
+   > **Si registraste una cuenta local y no recibiste el correo:** con `EMAIL_PROVIDER=outbox` no se envía correo real. Abre el archivo `.eml` más reciente en `outbox/emails/` para obtener el enlace, configura SMTP real o usa el registro con Clerk (`/sign-up`).
+
    La migración `018_rate_limit.sql` agrega `rate_limit_buckets`, la ventana fija compartida entre réplicas para login, refresh, registro, verificación, recuperación y reservas. El rate limiter en memoria se conserva como primera barrera por instancia; PostgreSQL aplica el límite global. Si la base no responde, la capa distribuida falla abierto y registra el error para no bloquear todo el portal.
 
 3. **Iniciar la API**:
@@ -307,15 +317,14 @@ MediList/
    # {"status":"ok","database":"up"}
    ```
 
-### Credenciales iniciales
+### Acceso inicial
 
-La migración crea un administrador:
+No existen credenciales locales ni contraseña de administrador. El administrador entra únicamente con Clerk.
 
-| Usuario | Contraseña temporal |
-|---|---|
-| `admin` | `Admin12345!2026` |
-
-**Cambia esta contraseña inmediatamente** con `POST /api/v1/auth/password` o mediante `PUT /api/v1/usuarios/1`. El hash bcrypt se almacena en la base; la contraseña nunca se devuelve por la API.
+1. Crea una cuenta en Clerk con el correo definido en `CLERK_BOOTSTRAP_ADMIN_EMAIL`.
+2. Inicia sesión en `/sign-in`. La API vincula la cuenta y le asigna el rol `admin` una sola vez.
+3. Elimina `CLERK_BOOTSTRAP_ADMIN_EMAIL` del `.env` y reinicia la API.
+4. Desde `/admin/usuarios` puedes crear o editar cuentas internas con correo y roles. El primer inicio de sesión con Clerk usando el mismo correo verificado las vincula automáticamente.
 
 ### Feature flags
 
@@ -341,192 +350,100 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e_fase10.ps1 -Pa
 
 Crea una base temporal, valida las flags apagadas, activa el flujo completo y elimina la base al terminar.
 
+### Checklist para iniciar el frontend
+
+1. **Base de datos:** mantén PostgreSQL local con las migraciones aplicadas:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1 -Password "TU_PASSWORD_LOCAL"
+   ```
+2. **API local:** arranca con las flags activas:
+   ```powershell
+   .\scripts\run.ps1
+   # o: go run ./cmd/api
+   ```
+   En desarrollo las flags ya vienen activas por defecto; también puedes fijarlas en `.env`:
+   ```env
+   PORTAL_PACIENTE_ENABLED=true
+   DERIVACIONES_ENABLED=true
+   TRANSFERENCIAS_PACIENTE_ENABLED=true
+   ```
+
+   **Frontend** (React + Vite + Tailwind):
+   ```powershell
+   cd frontend
+   npm install
+   npm run dev
+   ```
+   Queda disponible en `http://localhost:5173` y Vite reenvía `/api` al backend local.
+   Para Clerk, crea `frontend/.env.local` con `VITE_CLERK_PUBLISHABLE_KEY=pk_test_...` y define `CLERK_SECRET_KEY=sk_test_...` en el `.env` del backend (ver sección Clerk).
+3. **CORS:** configura el origen exacto del frontend. Para Vite/React y Next.js locales:
+   ```env
+   CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+   ```
+   Ajusta los puertos si tu frontend usa otro origen.
+4. **Contrato:** usa [docs/openapi.yaml](./docs/openapi.yaml) como fuente de verdad para tipos, endpoints y errores.
+5. **Health check:** verifica `http://localhost:8080/health` antes de conectar el frontend.
+
 ---
 
 ## Autenticación
 
-Base URL: `http://localhost:8080/api/v1`
+**Clerk es el único proveedor de identidad de MediList.** No existe login local, registro con contraseña, verificación de correo propia ni recuperación de contraseña en la API o en la SPA. Clerk gestiona el registro, la verificación del correo, el inicio de sesión y el restablecimiento de contraseña.
 
-### Registro y verificación de pacientes
+### Flujo de registro de un paciente
 
-1. `POST /auth/register` crea en una sola transacción la persona, el paciente, la cuenta, el rol `paciente`, el token de verificación y la auditoría. No emite sesión.
-2. La API escribe un correo con un enlace de un solo uso en el buzón de desarrollo (`outbox/emails/`).
-3. `POST /auth/verify-email` consume el token. Un token vencido o ya usado devuelve `400`.
-4. `POST /auth/resend-verification` invalida el enlace anterior y emite uno nuevo.
-5. `POST /auth/login` solo funciona para una cuenta de paciente cuando su email ya está verificado. Las cuentas internas existentes (`admin`, `medico`, `recepcion`, etc.) quedan exentas para no bloquear la operación durante la transición.
-6. `POST /auth/forgot-password` y `POST /auth/reset-password` permiten recuperar la contraseña. El reset verifica el email si aún no lo estaba, incrementa `token_version`, limpia bloqueos y revoca todos los refresh tokens.
+1. El paciente entra a `/sign-up` y se registra con Clerk.
+2. Clerk verifica su correo.
+3. La SPA obtiene el token de sesión con `getToken()` y llama a `POST /auth/clerk`.
+4. Si la cuenta local no existe, la API **no crea nada todavía**: responde `registro_pendiente` con el correo y los nombres de Clerk.
+5. La SPA abre `/completar-registro`. Ese formulario pide documento, fecha de nacimiento, sexo, teléfono y dirección.
+6. Al enviar, la SPA llama a `POST /auth/clerk/registro` con el token de Clerk y los datos clínicos.
+7. La API vuelve a verificar el token y, en una sola transacción:
+   - crea la persona y la historia clínica si el documento no existe;
+   - o crea una solicitud de vinculación si el documento ya existe sin cuenta;
+   - crea la cuenta local con rol `paciente`, la vincula a Clerk y marca el correo como verificado;
+   - emite los tokens locales de MediList.
+8. El paciente entra al portal. Si se creó una solicitud, queda pendiente de aprobación por recepción.
 
-Si el documento ya existe como paciente sin cuenta, el registro **no crea otra historia clínica**. Devuelve `202` con una `solicitud_id`; recepción debe aprobar la vinculación después de validar la identidad. Si el documento ya tiene una cuenta vinculada, devuelve `409`.
+### Personal de salud
 
-```powershell
-$registro = @{
-  username = "juan.perez"
-  email = "juan.perez@example.com"
-  password = "UnaClaveSegura123!"
-  nombres = "Juan"
-  apellidos = "Pérez"
-  tipo_documento = "CEDULA"
-  numero_documento = "0102030405"
-  fecha_nacimiento = "1990-05-12"
-  sexo = "masculino"
-  telefono = "+593999999999"
-  direccion = "Av. Principal y Calle 1"
-  acepta_terminos = $true
-  version_terminos = "2026-10"
-} | ConvertTo-Json
+El administrador crea la cuenta local con correo y roles desde `/admin/usuarios`, o actualiza el correo de una cuenta existente. Cuando esa persona inicia sesión con Clerk usando el mismo correo verificado, la cuenta se vincula automáticamente.
 
-$alta = Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8080/api/v1/auth/register `
-  -ContentType "application/json" -Body $registro
-```
+Para el arranque inicial, `CLERK_BOOTSTRAP_ADMIN_EMAIL` permite que un correo de Clerk reciba el rol `admin` la primera vez. Después de vincular al administrador, deja esa variable vacía y reinicia la API.
 
-Respuesta de un paciente nuevo:
-
-```json
-{
-  "data": {
-    "usuario_id": 42,
-    "paciente_id": 18,
-    "email": "juan.perez@example.com",
-    "email_verificado": false,
-    "vinculacion_pendiente": false,
-    "mensaje": "Revisa tu correo para verificar la cuenta."
-  }
-}
-```
-
-El enlace del correo apunta a `EMAIL_LINK_BASE_URL` y contiene el token en claro solo en el buzón; la base guarda únicamente su hash SHA-256. Nunca copies tokens a logs ni a la auditoría.
-
-### Flujo de sesión
-
-1. `POST /auth/login` con `username` y `password`.
-2. La API devuelve un **access token** (15 min por defecto) y un **refresh token** (7 días por defecto).
-3. Envía el access token en cada solicitud:
-
-   ```http
-   Authorization: Bearer <access_token>
-   ```
-
-4. Cuando el access token expire, usa `POST /auth/refresh` con el refresh token.
-5. El refresh token rota en cada uso: el anterior queda revocado.
-6. `POST /auth/logout` revoca el refresh token activo.
-7. Cada request protegido verifica en PostgreSQL que la cuenta siga activa y que `token_version` coincida con el claim `ver`. Si cambian roles, contraseña, estado o se revocan sesiones, los access tokens anteriores dejan de funcionar de inmediato.
-
-> **Clientes con refresh concurrente:** el refresh rota de forma atómica. Si dos solicitudes usan el mismo refresh token a la vez, solo una puede rotarlo; la otra se considera reutilización y revoca todas las sesiones del usuario, incluidos los access tokens vigentes. Los clientes deben serializar el refresh (por ejemplo, con un mutex o una única tarea de renovación) y reintentar el request original después de renovar.
-
-### Endpoints de autenticación
+### Endpoints
 
 | Método | Ruta | Autenticación | Descripción |
 |---|---|---|---|
-| `POST` | `/auth/register` | Pública, rate-limited | Registra paciente o crea solicitud de vinculación |
-| `POST` | `/auth/verify-email` | Pública, rate-limited | Consume el token de verificación |
-| `POST` | `/auth/resend-verification` | Pública, rate-limited | Reenvía verificación sin revelar si la cuenta existe |
-| `POST` | `/auth/forgot-password` | Pública, rate-limited | Solicita recuperación sin revelar si la cuenta existe |
-| `POST` | `/auth/reset-password` | Pública, rate-limited | Cambia la contraseña y revoca sesiones |
-| `POST` | `/auth/login` | Pública | Inicia sesión y emite tokens; bloquea pacientes sin email verificado |
-| `POST` | `/auth/refresh` | Refresh token | Rota el refresh token y emite un nuevo par |
+| `POST` | `/auth/clerk` | Pública, rate-limited | Inicia sesión o indica `registro_pendiente` |
+| `POST` | `/auth/clerk/registro` | Pública, rate-limited | Crea la cuenta después de completar los datos clínicos |
+| `POST` | `/auth/refresh` | Refresh token | Rota el refresh token |
 | `POST` | `/auth/logout` | Refresh token | Revoca el refresh token |
-| `GET` | `/auth/me` | Bearer | Devuelve el usuario, roles, permisos, estado de verificación y los IDs `paciente_id`/`medico_id` vinculados |
-| `POST` | `/auth/password` | Bearer | Cambia la contraseña del usuario autenticado |
+| `GET` | `/auth/me` | Bearer | Usuario, roles, permisos, vínculos y `requiere_completar_registro` |
 
-Los límites en memoria por instancia son: 5 registros por IP/hora; 30 verificaciones por IP/minuto; 3 reenvíos por IP+email/15 minutos; 5 solicitudes de recuperación por IP+email/15 minutos; 10 resets por IP/15 minutos. La respuesta `429` incluye `Retry-After`.
+Los tokens locales siguen siendo JWT de MediList: access token de 15 minutos y refresh token rotativo de 7 días. El frontend los mantiene solo en memoria.
 
-Ejemplo de recuperación:
+### Conversión de paciente a médico
 
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8080/api/v1/auth/forgot-password `
-  -ContentType "application/json" `
-  -Body (@{ email = "juan.perez@example.com" } | ConvertTo-Json)
+Un administrador puede convertir una cuenta de paciente en médico con:
 
-# El token se lee del .eml del buzón de desarrollo.
-Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8080/api/v1/auth/reset-password `
-  -ContentType "application/json" `
-  -Body (@{
-    token = "<token-del-correo>"
-    password_nueva = "OtraClaveSegura456!"
-  } | ConvertTo-Json)
-```
+```http
+POST /api/v1/cuentas/convertir-paciente-medico
+Authorization: Bearer <token-admin>
 
-### Vinculación de cuentas
-
-Solo `admin` y `recepcion` pueden aprobar o rechazar solicitudes (`cuentas:vincular`). La cuenta pendiente puede verificar su email, pero no obtiene acceso a datos clínicos hasta que la vinculación se apruebe. Al rechazar, la cuenta se desactiva y se revocan sus sesiones.
-
-| Método | Ruta | Permiso | Descripción |
-|---|---|---|---|
-| `GET` | `/cuentas/vinculaciones` | `cuentas:vincular` | Lista solicitudes; filtros `estado`, `search`, paginación |
-| `POST` | `/cuentas/vinculaciones/{id}/aprobar` | `cuentas:vincular` | Vincula la cuenta con la historia existente |
-| `POST` | `/cuentas/vinculaciones/{id}/rechazar` | `cuentas:vincular` | Rechaza con `motivo` obligatorio y desactiva la cuenta |
-| `POST` | `/cuentas/vincular-paciente` | `cuentas:vincular` | Vinculación directa desde recepción |
-| `POST` | `/cuentas/vincular-medico` | `usuarios:escribir` | Asocia una cuenta con rol `medico` a un perfil médico |
-
-```powershell
-Invoke-RestMethod -Method Get `
-  -Uri "http://localhost:8080/api/v1/cuentas/vinculaciones?estado=pendiente&search=0102030405" `
-  -Headers $headers
-
-Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8080/api/v1/cuentas/vinculaciones/7/aprobar `
-  -Headers $headers
-```
-
-Rechazo:
-
-```json
 {
-  "motivo": "El documento no coincide con la historia clínica"
+  "usuario_id": 118,
+  "especialidad_id": 1,
+  "numero_licencia": "LIC-...",
+  "tipo_profesional": "medico",
+  "duracion_cita_min": 30,
+  "bio": "",
+  "foto_url": "",
+  "acepta_portal": true
 }
 ```
 
-### Ejemplo de login
-
-```powershell
-$login = Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8080/api/v1/auth/login `
-  -ContentType "application/json" `
-  -Body (@{ username = "admin"; password = "Admin12345!2026" } | ConvertTo-Json)
-
-$access  = $login.data.access_token
-$refresh = $login.data.refresh_token
-$headers = @{ Authorization = "Bearer $access" }
-```
-
-Respuesta:
-
-```json
-{
-  "data": {
-    "access_token": "eyJ...",
-    "refresh_token": "b3...",
-    "token_type": "Bearer",
-    "expires_in": 900,
-    "usuario": {
-      "id": 1,
-      "username": "admin",
-      "roles": ["admin"],
-      "permisos": ["pacientes:leer", "pacientes:escribir", "..."]
-    }
-  }
-}
-```
-
-### Cambio de contraseña
-
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8080/api/v1/auth/password `
-  -Headers $headers `
-  -ContentType "application/json" `
-  -Body (@{
-    password_actual = "Admin12345!2026"
-    password_nueva  = "NuevaClaveSegura#2026"
-  } | ConvertTo-Json)
-```
-
-La nueva contraseña debe tener al menos 12 caracteres e incluir mayúscula, minúscula, número y carácter especial. Al cambiarla se incrementa `token_version` y se revocan todos los refresh tokens, por lo que el access token anterior también queda inválido de inmediato.
-
----
+La operación reutiliza la persona y la historia clínica existentes, crea el perfil de médico, vincula `medicos.usuario_id`, reemplaza el rol `paciente` por `medico` y revoca las sesiones. Si la cuenta era administradora, conserva el rol `admin`.
 
 ## Roles y permisos
 
@@ -702,6 +619,7 @@ El perfil se resuelve exclusivamente desde `pacientes.usuario_id`. El body no ad
 
 | Método | Ruta | Permiso | Descripción |
 |---|---|---|---|
+| `POST` | `/portal/cuenta/completar-registro` | Bearer (sin permiso) | Completa la historia clínica de una cuenta sin vínculo o crea una solicitud |
 | `GET` | `/portal/perfil` | `portal:perfil:leer` | Devuelve la historia propia y el estado de la cuenta |
 | `PUT` | `/portal/perfil` | `portal:perfil:escribir` | Actualiza teléfono, dirección y contacto de emergencia; acepta `version` |
 | `GET` | `/portal/especialidades` | `catalogo:leer` | Catálogo activo con `requiere_derivacion` y duración |
@@ -1273,6 +1191,18 @@ Las pruebas de cuentas cubren registro transaccional, documento duplicado, dos r
 - Las versiones optimistas hacen que dos escrituras simultáneas no se sobrescriban: el cliente que recibe `409` debe volver a consultar el recurso y reintentar con la versión actual.
 - La retención de `auditoria` y `errores_aplicacion` es automática; revisa sus valores antes de producción. Programa también la limpieza de `refresh_tokens` expirados, `rate_limit_buckets` antiguos y notificaciones enviadas antiguas. Para alto volumen, particiona `errores_aplicacion` por fecha o envíalos solo a un agregador externo.
 
+### Pendientes de producción (fuera de alcance de la práctica)
+
+Este proyecto es una práctica y no se desplegará a producción. Los siguientes puntos quedan documentados como trabajo futuro y **no bloquean el desarrollo del frontend local**:
+
+- [ ] Ejecutar el E2E completo en un staging real.
+- [ ] Configurar SMTP real, TLS, secretos y dominio definitivo.
+- [ ] Activar las feature flags gradualmente en staging.
+- [ ] Ejecutar por primera vez el workflow de GitHub Actions en el repositorio remoto.
+- [ ] Habilitar MFA de administrador si se decide para una versión futura.
+- [ ] Revisar y escanear las imágenes/contenedores antes de un despliegue real.
+
+El entorno local ya tiene API, PostgreSQL, flags, CORS y OpenAPI listos para el frontend.
 
 ## Contribuyentes y asistencia
 

@@ -20,7 +20,6 @@ type CrearUsuarioInput struct {
 	Email     string
 	Nombres   string
 	Apellidos string
-	Password  string
 	Roles     []string
 }
 
@@ -31,20 +30,18 @@ type ActualizarUsuarioInput struct {
 	Apellidos string
 	Activo    *bool
 	Roles     []string
-	Password  *string
 	Version   int64
 }
 
 // UsuarioService gestiona usuarios, roles y bloqueos.
 type UsuarioService struct {
-	store      UsuarioStore
-	roles      RolStore
-	bcryptCost int
+	store UsuarioStore
+	roles RolStore
 }
 
 // NewUsuarioService construye el servicio de usuarios.
-func NewUsuarioService(store UsuarioStore, roles RolStore, bcryptCost int) *UsuarioService {
-	return &UsuarioService{store: store, roles: roles, bcryptCost: bcryptCost}
+func NewUsuarioService(store UsuarioStore, roles RolStore) *UsuarioService {
+	return &UsuarioService{store: store, roles: roles}
 }
 
 func (s *UsuarioService) Crear(ctx context.Context, in CrearUsuarioInput) (*entities.Usuario, error) {
@@ -62,26 +59,18 @@ func (s *UsuarioService) Crear(ctx context.Context, in CrearUsuarioInput) (*enti
 	if nombres == "" || apellidos == "" {
 		return nil, entities.NewValidationError("nombres y apellidos son obligatorios")
 	}
-	if err := validarPassword(in.Password); err != nil {
-		return nil, err
-	}
 	roles, err := s.resolverRoles(ctx, in.Roles)
-	if err != nil {
-		return nil, err
-	}
-	hash, err := hashearPassword(in.Password, s.bcryptCost)
 	if err != nil {
 		return nil, err
 	}
 
 	usuario := entities.Usuario{
-		Username:     username,
-		Email:        email,
-		PasswordHash: hash,
-		Nombres:      nombres,
-		Apellidos:    apellidos,
-		Activo:       true,
-		Roles:        roles,
+		Username:  username,
+		Email:     email,
+		Nombres:   nombres,
+		Apellidos: apellidos,
+		Activo:    true,
+		Roles:     roles,
 	}
 	if err := s.store.Crear(ctx, &usuario); err != nil {
 		return nil, err
@@ -143,18 +132,7 @@ func (s *UsuarioService) Actualizar(ctx context.Context, id int64, in Actualizar
 		return nil, entities.NewValidationError("no puedes quitarte el rol admin a ti mismo")
 	}
 
-	passwordHash := ""
 	revocarSesiones := !activo && actual.Activo
-	if in.Password != nil {
-		if err := validarPassword(*in.Password); err != nil {
-			return nil, err
-		}
-		passwordHash, err = hashearPassword(*in.Password, s.bcryptCost)
-		if err != nil {
-			return nil, err
-		}
-		revocarSesiones = true
-	}
 	if !sameRoles(actual.Roles, roles) {
 		revocarSesiones = true
 	}
@@ -169,7 +147,7 @@ func (s *UsuarioService) Actualizar(ctx context.Context, id int64, in Actualizar
 		Roles:     roles,
 		Version:   actual.Version,
 	}
-	if err := s.store.Actualizar(ctx, &usuario, passwordHash, revocarSesiones); err != nil {
+	if err := s.store.Actualizar(ctx, &usuario, "", revocarSesiones); err != nil {
 		return nil, err
 	}
 	return s.store.ObtenerPorID(ctx, id)

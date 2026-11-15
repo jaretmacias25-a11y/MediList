@@ -21,6 +21,7 @@ type PacienteStore interface {
 	Crear(ctx context.Context, p *entities.Paciente) error
 	ObtenerPorID(ctx context.Context, id int64) (*entities.Paciente, error)
 	BuscarPorDocumento(ctx context.Context, tipoDocumento, numeroDocumento string) (*entities.Paciente, error)
+	BuscarPorUsuarioID(ctx context.Context, usuarioID int64) (*entities.Paciente, error)
 	Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Paciente, error)
 	Actualizar(ctx context.Context, p *entities.Paciente) error
 	VincularUsuario(ctx context.Context, pacienteID, usuarioID int64) error
@@ -236,6 +237,9 @@ type NotificacionEmailSender interface {
 type UsuarioStore interface {
 	BuscarPorUsername(ctx context.Context, username string) (*entities.Usuario, error)
 	BuscarPorEmail(ctx context.Context, email string) (*entities.Usuario, error)
+	BuscarPorClerkID(ctx context.Context, clerkID string) (*entities.Usuario, error)
+	VincularClerkID(ctx context.Context, usuarioID int64, clerkID string) error
+	AsegurarRol(ctx context.Context, usuarioID int64, codigo string) error
 	ObtenerPorID(ctx context.Context, id int64) (*entities.Usuario, error)
 	Listar(ctx context.Context, opts entities.ListOptions) ([]entities.Usuario, error)
 	Crear(ctx context.Context, u *entities.Usuario) error
@@ -289,6 +293,27 @@ type CuentaStore interface {
 		solicitud *entities.SolicitudVinculacion,
 		auditoria *entities.Auditoria,
 	) error
+	CompletarRegistroPaciente(
+		ctx context.Context,
+		usuario *entities.Usuario,
+		paciente *entities.Paciente,
+		motivo string,
+		auditoria *entities.Auditoria,
+	) (*entities.Paciente, *entities.SolicitudVinculacion, error)
+	RegistrarCuentaClerk(
+		ctx context.Context,
+		usuario *entities.Usuario,
+		paciente *entities.Paciente,
+		motivo string,
+		auditoria *entities.Auditoria,
+	) (*entities.Paciente, *entities.SolicitudVinculacion, error)
+	ConvertirPacienteEnMedico(
+		ctx context.Context,
+		usuarioID int64,
+		medico *entities.Medico,
+		rol string,
+		auditoria *entities.Auditoria,
+	) (*entities.Medico, error)
 	ReemplazarToken(ctx context.Context, token *entities.TokenCuenta) error
 	VerificarEmail(
 		ctx context.Context,

@@ -91,6 +91,7 @@ func (m *AuthMiddleware) Require(permission string, next http.Handler) http.Hand
 			actor.EmailVerificado = vinculos.EmailVerificado
 			actor.PacienteID = vinculos.PacienteID
 			actor.MedicoID = vinculos.MedicoID
+			actor.SolicitudPendiente = vinculos.SolicitudPendiente
 		}
 
 		if permission != "" && !tienePermiso(claims, permission) {

@@ -25,7 +25,7 @@ func NewUsuarioStore(db *pgxpool.Pool) *UsuarioStore {
 
 const usuarioSelect = `
 	SELECT
-		u.id, u.username, u.email, u.password_hash, u.nombres, u.apellidos,
+		u.id, u.username, u.email, u.password_hash, u.clerk_user_id, u.nombres, u.apellidos,
 		u.activo, u.token_version, u.intentos_fallidos, u.bloqueado_hasta, u.ultimo_acceso,
 		u.email_verificado_en, u.terminos_aceptados_en, u.version_terminos,
 		u.debe_cambiar_password, u.version, u.created_at, u.updated_at,
@@ -63,6 +63,45 @@ func (s *UsuarioStore) BuscarPorEmail(ctx context.Context, email string) (*entit
 		return nil, mapError(err)
 	}
 	return u, nil
+}
+
+// BuscarPorClerkID localiza la cuenta vinculada a una identidad de Clerk.
+func (s *UsuarioStore) BuscarPorClerkID(ctx context.Context, clerkID string) (*entities.Usuario, error) {
+	q := usuarioSelect + `
+		WHERE u.clerk_user_id = $1
+		GROUP BY u.id`
+	u, err := scanUsuario(s.db.QueryRow(ctx, q, clerkID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: usuario no encontrado", entities.ErrNotFound)
+	}
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return u, nil
+}
+
+// VincularClerkID asocia una identidad de Clerk a una cuenta existente.
+func (s *UsuarioStore) VincularClerkID(ctx context.Context, usuarioID int64, clerkID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE usuarios
+		SET clerk_user_id = $2, version = version + 1
+		WHERE id = $1`, usuarioID, clerkID)
+	if err != nil {
+		return mapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return noEncontrado("usuario", usuarioID)
+	}
+	return nil
+}
+
+// AsegurarRol agrega un rol a la cuenta si todavía no lo tiene.
+func (s *UsuarioStore) AsegurarRol(ctx context.Context, usuarioID int64, codigo string) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO usuario_roles (usuario_id, rol_id)
+		SELECT $1, id FROM roles WHERE codigo = $2
+		ON CONFLICT DO NOTHING`, usuarioID, codigo)
+	return mapError(err)
 }
 
 func (s *UsuarioStore) ObtenerPorID(ctx context.Context, id int64) (*entities.Usuario, error) {
@@ -114,16 +153,21 @@ func (s *UsuarioStore) Crear(ctx context.Context, u *entities.Usuario) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	var clerkID pgtype.Text
+	if u.ClerkUserID != "" {
+		clerkID = pgtype.Text{String: u.ClerkUserID, Valid: true}
+	}
+
 	const insertUsuario = `
 		INSERT INTO usuarios (
-			username, email, password_hash, nombres, apellidos, activo,
+			username, email, password_hash, clerk_user_id, nombres, apellidos, activo,
 			email_verificado_en, terminos_aceptados_en, version_terminos,
 			debe_cambiar_password
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, version, created_at, updated_at`
 	err = tx.QueryRow(ctx, insertUsuario,
-		u.Username, u.Email, u.PasswordHash, u.Nombres, u.Apellidos, u.Activo,
+		u.Username, u.Email, u.PasswordHash, clerkID, u.Nombres, u.Apellidos, u.Activo,
 		u.EmailVerificadoEn, u.TerminosAceptadosEn, u.VersionTerminos,
 		u.DebeCambiarPassword,
 	).Scan(&u.ID, &u.Version, &u.CreatedAt, &u.UpdatedAt)
@@ -371,8 +415,9 @@ func scanUsuario(row rowScanner) (*entities.Usuario, error) {
 	var u entities.Usuario
 	var bloqueadoHasta, ultimoAcceso pgtype.Timestamptz
 	var emailVerificado, terminosAceptados pgtype.Timestamptz
+	var clerkUserID, passwordHash pgtype.Text
 	err := row.Scan(
-		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Nombres, &u.Apellidos,
+		&u.ID, &u.Username, &u.Email, &passwordHash, &clerkUserID, &u.Nombres, &u.Apellidos,
 		&u.Activo, &u.TokenVersion, &u.IntentosFallidos, &bloqueadoHasta, &ultimoAcceso,
 		&emailVerificado, &terminosAceptados, &u.VersionTerminos,
 		&u.DebeCambiarPassword, &u.Version, &u.CreatedAt, &u.UpdatedAt,
@@ -380,6 +425,12 @@ func scanUsuario(row rowScanner) (*entities.Usuario, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+	if passwordHash.Valid {
+		u.PasswordHash = passwordHash.String
+	}
+	if clerkUserID.Valid {
+		u.ClerkUserID = clerkUserID.String
 	}
 	if bloqueadoHasta.Valid {
 		t := bloqueadoHasta.Time

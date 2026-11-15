@@ -34,7 +34,11 @@ func (s *ActorStore) ResolverVinculos(ctx context.Context, usuarioID int64) (*en
 			  LIMIT 1),
 			(SELECT m.id FROM medicos m
 			  WHERE m.usuario_id = u.id AND m.activo
-			  LIMIT 1)
+			  LIMIT 1),
+			EXISTS (
+				SELECT 1 FROM solicitudes_vinculacion s
+				WHERE s.usuario_id = u.id AND s.estado = 'pendiente'
+			)
 		FROM usuarios u
 		WHERE u.id = $1`
 
@@ -45,6 +49,7 @@ func (s *ActorStore) ResolverVinculos(ctx context.Context, usuarioID int64) (*en
 		&vinculos.EmailVerificado,
 		&pacienteID,
 		&medicoID,
+		&vinculos.SolicitudPendiente,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, noEncontrado("usuario", usuarioID)

@@ -45,18 +45,21 @@ type Config struct {
 	ErrorRetention    time.Duration
 	AuditRetention    time.Duration
 
-	EmailProvider        string
-	EmailFrom            string
-	EmailOutboxDir       string
-	EmailLinkBaseURL     string
-	EmailVerificationTTL time.Duration
-	PasswordResetTTL     time.Duration
-	SMTPHost             string
-	SMTPPort             int
-	SMTPUser             string
-	SMTPPassword         string
-	TermsVersion         string
-	MinEdadCuenta        int
+	EmailProvider            string
+	EmailFrom                string
+	EmailOutboxDir           string
+	EmailLinkBaseURL         string
+	EmailVerificationTTL     time.Duration
+	PasswordResetTTL         time.Duration
+	SMTPHost                 string
+	SMTPPort                 int
+	SMTPUser                 string
+	SMTPPassword             string
+	ClerkSecretKey           string
+	ClerkAuthorizedParties   []string
+	ClerkBootstrapAdminEmail string
+	TermsVersion             string
+	MinEdadCuenta            int
 
 	ClinicTimezone            string
 	PortalMinNoticeHours      int
@@ -114,18 +117,21 @@ func Load() Config {
 		ErrorRetention:    time.Duration(getenvInt("ERROR_RETENTION_DAYS", 90)) * 24 * time.Hour,
 		AuditRetention:    time.Duration(getenvInt("AUDIT_RETENTION_DAYS", 365)) * 24 * time.Hour,
 
-		EmailProvider:        strings.ToLower(strings.TrimSpace(getenv("EMAIL_PROVIDER", "outbox"))),
-		EmailFrom:            strings.TrimSpace(getenv("EMAIL_FROM", "MediList <no-reply@medilist.local>")),
-		EmailOutboxDir:       strings.TrimSpace(getenv("EMAIL_OUTBOX_DIR", "outbox/emails")),
-		EmailLinkBaseURL:     strings.TrimSpace(getenv("EMAIL_LINK_BASE_URL", "http://localhost:3000")),
-		EmailVerificationTTL: time.Duration(getenvInt("EMAIL_VERIFICATION_HOURS", 24)) * time.Hour,
-		PasswordResetTTL:     time.Duration(getenvInt("PASSWORD_RESET_MINUTES", 60)) * time.Minute,
-		SMTPHost:             strings.TrimSpace(getenv("SMTP_HOST", "")),
-		SMTPPort:             getenvInt("SMTP_PORT", 587),
-		SMTPUser:             strings.TrimSpace(getenv("SMTP_USER", "")),
-		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
-		TermsVersion:         strings.TrimSpace(getenv("TERMS_VERSION", "2026-10")),
-		MinEdadCuenta:        getenvInt("MIN_EDAD_CUENTA", 18),
+		EmailProvider:            strings.ToLower(strings.TrimSpace(getenv("EMAIL_PROVIDER", "outbox"))),
+		EmailFrom:                strings.TrimSpace(getenv("EMAIL_FROM", "MediList <no-reply@medilist.local>")),
+		EmailOutboxDir:           strings.TrimSpace(getenv("EMAIL_OUTBOX_DIR", "outbox/emails")),
+		EmailLinkBaseURL:         strings.TrimSpace(getenv("EMAIL_LINK_BASE_URL", "http://localhost:3000")),
+		EmailVerificationTTL:     time.Duration(getenvInt("EMAIL_VERIFICATION_HOURS", 24)) * time.Hour,
+		PasswordResetTTL:         time.Duration(getenvInt("PASSWORD_RESET_MINUTES", 60)) * time.Minute,
+		SMTPHost:                 strings.TrimSpace(getenv("SMTP_HOST", "")),
+		SMTPPort:                 getenvInt("SMTP_PORT", 587),
+		SMTPUser:                 strings.TrimSpace(getenv("SMTP_USER", "")),
+		SMTPPassword:             os.Getenv("SMTP_PASSWORD"),
+		ClerkSecretKey:           strings.TrimSpace(getenv("CLERK_SECRET_KEY", "")),
+		ClerkAuthorizedParties:   getenvStringList("CLERK_AUTHORIZED_PARTIES"),
+		ClerkBootstrapAdminEmail: strings.TrimSpace(getenv("CLERK_BOOTSTRAP_ADMIN_EMAIL", "")),
+		TermsVersion:             strings.TrimSpace(getenv("TERMS_VERSION", "2026-10")),
+		MinEdadCuenta:            getenvInt("MIN_EDAD_CUENTA", 18),
 
 		ClinicTimezone:            strings.TrimSpace(getenv("CLINIC_TIMEZONE", "America/Guayaquil")),
 		PortalMinNoticeHours:      getenvInt("PORTAL_MIN_NOTICE_HOURS", 2),

@@ -103,26 +103,17 @@ func NewRouter(d Dependencies) http.Handler {
 		mux.HandleFunc("GET /metrics", observability.MetricsHandler())
 	}
 
-	ah := NewAuthHandler(d.Auth, d.Logger)
-	mux.Handle("POST /api/v1/auth/login", rateLimit(
-		d.RateLimiter, d.Logger, rateKeyIP("login"), 30, time.Minute, http.HandlerFunc(ah.Login)))
+	ah := NewAuthHandler(d.Auth, d.Logger, d.Cuentas)
+	mux.Handle("POST /api/v1/auth/clerk", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("login"), 30, time.Minute, http.HandlerFunc(ah.ClerkLogin)))
+	mux.Handle("POST /api/v1/auth/clerk/registro", rateLimit(
+		d.RateLimiter, d.Logger, rateKeyIP("register"), 10, time.Hour, http.HandlerFunc(ah.RegistrarClerk)))
 	mux.Handle("POST /api/v1/auth/refresh", rateLimit(
 		d.RateLimiter, d.Logger, rateKeyIP("refresh"), 60, time.Minute, http.HandlerFunc(ah.Refresh)))
 	mux.HandleFunc("POST /api/v1/auth/logout", ah.Logout)
 	mux.Handle("GET /api/v1/auth/me", auth.Require("", http.HandlerFunc(ah.Me)))
-	mux.Handle("POST /api/v1/auth/password", auth.Require("", http.HandlerFunc(ah.CambiarPassword)))
 
 	cuh := NewCuentaHandler(d.Cuentas, d.Logger)
-	mux.Handle("POST /api/v1/auth/register", rateLimit(
-		d.RateLimiter, d.Logger, rateKeyIP("register"), 5, time.Hour, http.HandlerFunc(cuh.Registrar)))
-	mux.Handle("POST /api/v1/auth/verify-email", rateLimit(
-		d.RateLimiter, d.Logger, rateKeyIP("verify"), 30, time.Minute, http.HandlerFunc(cuh.VerificarEmail)))
-	mux.Handle("POST /api/v1/auth/resend-verification", rateLimit(
-		d.RateLimiter, d.Logger, rateKeyIP("resend"), 3, 15*time.Minute, http.HandlerFunc(cuh.ReenviarVerificacion)))
-	mux.Handle("POST /api/v1/auth/forgot-password", rateLimit(
-		d.RateLimiter, d.Logger, rateKeyIP("forgot"), 5, 15*time.Minute, http.HandlerFunc(cuh.SolicitarResetPassword)))
-	mux.Handle("POST /api/v1/auth/reset-password", rateLimit(
-		d.RateLimiter, d.Logger, rateKeyIP("reset"), 10, 15*time.Minute, http.HandlerFunc(cuh.RestablecerPassword)))
 
 	protegido := func(pattern, permiso string, handler http.HandlerFunc) {
 		mux.Handle(pattern, auth.Require(permiso, handler))
@@ -204,6 +195,8 @@ func NewRouter(d Dependencies) http.Handler {
 			soloAdmin(http.HandlerFunc(dah.Sobrescribir))))))
 
 	portalHandler := NewPortalHandler(d.PortalPaciente, d.Logger)
+	mux.Handle("POST /api/v1/portal/cuenta/completar-registro", portalPaciente(auth.Require("",
+		http.HandlerFunc(cuh.CompletarRegistro))))
 	mux.Handle("GET /api/v1/portal/perfil", portalPaciente(auth.Require("portal:perfil:leer",
 		auditDataAccess(d.AuditoriaStore, d.Logger, "consultar_perfil_propio", "perfil_paciente",
 			http.HandlerFunc(portalHandler.Perfil)))))
@@ -286,6 +279,7 @@ func NewRouter(d Dependencies) http.Handler {
 	escritura("POST /api/v1/cuentas/vinculaciones/{id}/rechazar", "cuentas:vincular", cuh.RechazarSolicitud)
 	escritura("POST /api/v1/cuentas/vincular-paciente", "cuentas:vincular", cuh.VincularPaciente)
 	escritura("POST /api/v1/cuentas/vincular-medico", "usuarios:escribir", cuh.VincularMedico)
+	escritura("POST /api/v1/cuentas/convertir-paciente-medico", "usuarios:escribir", cuh.ConvertirPacienteEnMedico)
 
 	consultaAuditada := func(pattern, permiso string, handler http.HandlerFunc) {
 		mux.Handle(pattern, auth.Require(permiso,

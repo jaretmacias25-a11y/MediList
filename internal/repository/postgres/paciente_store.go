@@ -81,6 +81,18 @@ func (s *PacienteStore) ObtenerPorID(ctx context.Context, id int64) (*entities.P
 	return p, nil
 }
 
+// BuscarPorUsuarioID localiza la historia clínica vinculada a una cuenta.
+func (s *PacienteStore) BuscarPorUsuarioID(ctx context.Context, usuarioID int64) (*entities.Paciente, error) {
+	p, err := scanPaciente(s.db.QueryRow(ctx, pacienteSelect+` WHERE p.usuario_id = $1`, usuarioID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, entities.ErrNotFound
+	}
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return p, nil
+}
+
 // BuscarPorDocumento localiza una historia clínica por el documento de su
 // persona. El tipo se compara sin distinguir mayúsculas porque los formularios
 // históricos usan valores como "cedula" y "CEDULA".

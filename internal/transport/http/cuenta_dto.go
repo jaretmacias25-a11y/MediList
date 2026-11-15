@@ -65,6 +65,62 @@ type registroPacienteResponse struct {
 	Mensaje              string `json:"mensaje"`
 }
 
+type completarRegistroPacienteRequest struct {
+	Nombres         string `json:"nombres"`
+	Apellidos       string `json:"apellidos"`
+	TipoDocumento   string `json:"tipo_documento"`
+	NumeroDocumento string `json:"numero_documento"`
+	FechaNacimiento string `json:"fecha_nacimiento"`
+	Sexo            string `json:"sexo"`
+	Telefono        string `json:"telefono"`
+	Direccion       string `json:"direccion"`
+}
+
+type convertirMedicoRequest struct {
+	UsuarioID       int64   `json:"usuario_id"`
+	EspecialidadID  int64   `json:"especialidad_id"`
+	NumeroLicencia  string  `json:"numero_licencia"`
+	TipoProfesional string  `json:"tipo_profesional"`
+	DuracionCitaMin *int    `json:"duracion_cita_min"`
+	Bio             *string `json:"bio"`
+	FotoURL         *string `json:"foto_url"`
+	AceptaPortal    *bool   `json:"acepta_portal"`
+}
+
+func (r convertirMedicoRequest) toInput() service.ConvertirPacienteMedicoInput {
+	return service.ConvertirPacienteMedicoInput{
+		EspecialidadID:  r.EspecialidadID,
+		NumeroLicencia:  r.NumeroLicencia,
+		TipoProfesional: r.TipoProfesional,
+		DuracionCitaMin: r.DuracionCitaMin,
+		Bio:             r.Bio,
+		FotoURL:         r.FotoURL,
+		AceptaPortal:    r.AceptaPortal,
+	}
+}
+
+func (r completarRegistroPacienteRequest) toInput() (service.CompletarRegistroPacienteInput, error) {
+	var fecha time.Time
+	if texto := strings.TrimSpace(r.FechaNacimiento); texto != "" {
+		parsed, err := time.Parse("2006-01-02", texto)
+		if err != nil {
+			return service.CompletarRegistroPacienteInput{}, entities.NewValidationError(
+				"fecha_nacimiento debe tener formato YYYY-MM-DD")
+		}
+		fecha = parsed
+	}
+	return service.CompletarRegistroPacienteInput{
+		Nombres:         r.Nombres,
+		Apellidos:       r.Apellidos,
+		TipoDocumento:   r.TipoDocumento,
+		NumeroDocumento: r.NumeroDocumento,
+		FechaNacimiento: fecha,
+		Sexo:            r.Sexo,
+		Telefono:        r.Telefono,
+		Direccion:       r.Direccion,
+	}, nil
+}
+
 type verificarEmailRequest struct {
 	Token string `json:"token"`
 }

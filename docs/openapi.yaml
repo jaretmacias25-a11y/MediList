@@ -1,10 +1,11 @@
 openapi: 3.1.0
 info:
   title: MediList API
-  version: 1.0.0
+  version: 1.1.0
   description: |
-    Contrato de los endpoints implementados hasta la Fase 10. El roadmap de
-    endurecimiento y despliegue está en doc.md y docs/runbook.md.
+    Contrato de los endpoints implementados hasta la Fase 10, incluida la
+    identidad externa opcional con Clerk. El roadmap de endurecimiento y
+    despliegue está en doc.md y docs/runbook.md.
 
     Las rutas de portal, derivaciones y transferencias pueden devolver 503 con
     código feature_disabled cuando su feature flag está apagada.
@@ -99,6 +100,30 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /api/v1/auth/clerk:
+    post:
+      tags: [Autenticación]
+      summary: Intercambia un token de sesión de Clerk por una sesión local
+      description: |
+        Verifica el token con la JWKS de Clerk, exige correo verificado y
+        aprovisiona o vincula la cuenta local con rol paciente.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ClerkLoginRequest'}
+      responses:
+        '200':
+          description: Tokens locales y datos del usuario
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TokenPairEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
 
   /api/v1/auth/refresh:
@@ -770,6 +795,35 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+
+  /api/v1/portal/cuenta/completar-registro:
+    post:
+      tags: [Portal paciente]
+      summary: Completa la historia clínica de una cuenta sin vínculo
+      description: |
+        Permite que una cuenta autenticada sin paciente_id (por ejemplo,
+        creada con Clerk) registre sus datos clínicos. Si el documento ya
+        existe sin cuenta, devuelve 202 con una solicitud de vinculación.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CompletarRegistroRequest'}
+      responses:
+        '201':
+          description: Historia clínica creada y vinculada a la cuenta
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RegistroPacienteResponse'}
+        '202':
+          description: Documento existente; solicitud de vinculación creada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RegistroPacienteResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
 
   /api/v1/portal/perfil:
     get:
@@ -1530,6 +1584,14 @@ components:
         username: {type: string}
         password: {type: string, format: password}
 
+    ClerkLoginRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: Token de sesión obtenido con getToken() de Clerk.
+
     RefreshRequest:
       type: object
       required: [refresh_token]
@@ -1915,6 +1977,30 @@ components:
         contacto_emergencia_nombre: {type: string}
         contacto_emergencia_telefono: {type: string}
         version: {type: integer, format: int64, description: Opcional; 0 significa sin control de versión}
+
+    CompletarRegistroRequest:
+      type: object
+      required: [nombres, apellidos, tipo_documento, numero_documento, fecha_nacimiento, sexo]
+      properties:
+        nombres: {type: string, maxLength: 120}
+        apellidos: {type: string, maxLength: 120}
+        tipo_documento: {type: string, enum: [CEDULA, PASAPORTE, RUC, OTRO]}
+        numero_documento: {type: string}
+        fecha_nacimiento: {type: string, format: date}
+        sexo: {type: string, enum: [femenino, masculino, otro, no_especificado]}
+        telefono: {type: string}
+        direccion: {type: string}
+
+    RegistroPacienteResponse:
+      type: object
+      properties:
+        usuario_id: {type: integer, format: int64}
+        paciente_id: {type: integer, format: int64, nullable: true}
+        solicitud_id: {type: integer, format: int64, nullable: true}
+        email: {type: string, format: email}
+        email_verificado: {type: boolean}
+        vinculacion_pendiente: {type: boolean}
+        mensaje: {type: string}
 
     VincularPacienteRequest:
       type: object

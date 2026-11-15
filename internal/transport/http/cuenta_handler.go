@@ -14,25 +14,27 @@ import (
 
 // CuentaHandler expone registro, verificación, recuperación y vinculación.
 type CuentaHandler struct {
-	svc             *service.CuentaService
-	logger          *slog.Logger
-	registerLimiter *rateLimiter
-	verifyLimiter   *rateLimiter
-	resendLimiter   *rateLimiter
-	recoveryLimiter *rateLimiter
-	resetLimiter    *rateLimiter
+	svc              *service.CuentaService
+	logger           *slog.Logger
+	registerLimiter  *rateLimiter
+	verifyLimiter    *rateLimiter
+	resendLimiter    *rateLimiter
+	recoveryLimiter  *rateLimiter
+	resetLimiter     *rateLimiter
+	completarLimiter *rateLimiter
 }
 
 // NewCuentaHandler construye el manejador de cuentas.
 func NewCuentaHandler(svc *service.CuentaService, logger *slog.Logger) *CuentaHandler {
 	return &CuentaHandler{
-		svc:             svc,
-		logger:          logger,
-		registerLimiter: newRateLimiter(5, time.Hour),
-		verifyLimiter:   newRateLimiter(30, time.Minute),
-		resendLimiter:   newRateLimiter(3, 15*time.Minute),
-		recoveryLimiter: newRateLimiter(5, 15*time.Minute),
-		resetLimiter:    newRateLimiter(10, 15*time.Minute),
+		svc:              svc,
+		logger:           logger,
+		registerLimiter:  newRateLimiter(5, time.Hour),
+		verifyLimiter:    newRateLimiter(30, time.Minute),
+		resendLimiter:    newRateLimiter(3, 15*time.Minute),
+		recoveryLimiter:  newRateLimiter(5, 15*time.Minute),
+		resetLimiter:     newRateLimiter(10, 15*time.Minute),
+		completarLimiter: newRateLimiter(20, time.Hour),
 	}
 }
 
@@ -75,6 +77,80 @@ func (h *CuentaHandler) Registrar(w http.ResponseWriter, r *http.Request) {
 	if resultado.VinculacionPendiente {
 		estado = http.StatusAccepted
 		resp.Mensaje = "Revisa tu correo para verificar la cuenta. Recepción revisará la vinculación con tu historia clínica."
+	}
+	writeData(w, estado, resp)
+}
+
+func (h *CuentaHandler) ConvertirPacienteEnMedico(w http.ResponseWriter, r *http.Request) {
+	actor := actorFromContext(r.Context())
+	if actor == nil {
+		writeUnauthorized(w)
+		return
+	}
+	var req convertirMedicoRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+	medico, err := h.svc.ConvertirPacienteEnMedico(
+		r.Context(), req.UsuarioID, req.toInput(),
+		actor.UsuarioID, actor.Username, clientIP(r), r.UserAgent(),
+	)
+	if err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+	writeData(w, http.StatusOK, nuevoMedicoResponse(*medico))
+}
+
+func (h *CuentaHandler) CompletarRegistro(w http.ResponseWriter, r *http.Request) {
+	actor := actorFromContext(r.Context())
+	if actor == nil {
+		writeUnauthorized(w)
+		return
+	}
+	if !h.permitir(w, h.completarLimiter, "completar|"+strconv.FormatInt(actor.UsuarioID, 10)) {
+		return
+	}
+
+	var req completarRegistroPacienteRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+	in, err := req.toInput()
+	if err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+
+	resultado, err := h.svc.CompletarRegistroPaciente(
+		r.Context(), actor.UsuarioID, in, clientIP(r), r.UserAgent(),
+	)
+	if err != nil {
+		writeServiceError(w, r, h.logger, err)
+		return
+	}
+
+	resp := registroPacienteResponse{
+		UsuarioID:            resultado.Usuario.ID,
+		Email:                resultado.Usuario.Email,
+		EmailVerificado:      resultado.Usuario.EmailVerificado(),
+		VinculacionPendiente: resultado.VinculacionPendiente,
+	}
+	if resultado.Paciente != nil {
+		id := resultado.Paciente.ID
+		resp.PacienteID = &id
+	}
+	if resultado.Solicitud != nil {
+		id := resultado.Solicitud.ID
+		resp.SolicitudID = &id
+	}
+	estado := http.StatusCreated
+	resp.Mensaje = "Registro completado. Ya puedes usar el portal del paciente."
+	if resultado.VinculacionPendiente {
+		estado = http.StatusAccepted
+		resp.Mensaje = "Tus datos fueron enviados. Recepción debe aprobar la vinculación con tu historia clínica."
 	}
 	writeData(w, estado, resp)
 }
